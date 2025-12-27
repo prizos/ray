@@ -1,25 +1,30 @@
 #include "raylib.h"
-
-#define SCREEN_WIDTH 1280
-#define SCREEN_HEIGHT 720
+#include "game.h"
+#include "render.h"
 
 int main(void)
 {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Ray");
+    // Initialize window
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Ray - 3D Demo");
     SetTargetFPS(60);
 
-    while (!WindowShouldClose())
-    {
-        // Update
+    // Initialize game state
+    GameState state;
+    game_init(&state);
 
-        // Draw
-        BeginDrawing();
-            ClearBackground(RAYWHITE);
-            DrawText("Ray Client", 10, 10, 20, DARKGRAY);
-            DrawFPS(SCREEN_WIDTH - 100, 10);
-        EndDrawing();
+    // Initialize rendering
+    render_init();
+
+    // Main game loop
+    while (state.running) {
+        game_update(&state);
+        render_frame(&state);
     }
 
+    // Cleanup
+    render_cleanup();
+    game_cleanup(&state);
     CloseWindow();
+
     return 0;
 }
