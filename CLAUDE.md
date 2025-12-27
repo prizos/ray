@@ -58,3 +58,88 @@ Client will communicate with Go backend via:
 - UDP for game state updates (low latency)
 - TCP for reliable messages (chat, inventory, etc.)
 - Protocol format: TBD (likely protobuf or flat binary)
+
+## Raylib Documentation
+
+Local raylib documentation is available in the `docs/` folder. **Always consult these before implementing raylib features.**
+
+### Quick Reference Files
+
+| File | Content | Use For |
+|------|---------|---------|
+| `docs/raylib_cheatsheet_v5.md` | Complete API (985 lines) | Function signatures, parameters, descriptions |
+| `docs/raylib.h` | Full header (1727 lines) | Struct definitions, enums, flags, constants |
+| `docs/FAQ.md` | General FAQ | Understanding raylib concepts |
+
+### Slash Commands
+
+- `/raylib <query>` - Search for functions, types, or concepts
+- `/raylib-module <module>` - Show all functions in a module
+
+### API Modules
+
+When looking up raylib APIs, functions are organized by module:
+
+| Module | Purpose | Key Functions |
+|--------|---------|---------------|
+| **rcore** | Window, input, timing | `InitWindow`, `IsKeyPressed`, `GetFrameTime` |
+| **rshapes** | 2D drawing, collision | `DrawRectangle`, `DrawCircle`, `CheckCollisionRecs` |
+| **rtextures** | Images, textures | `LoadTexture`, `DrawTexture`, `UnloadTexture` |
+| **rtext** | Fonts, text | `DrawText`, `LoadFont`, `MeasureText` |
+| **rmodels** | 3D models, meshes | `LoadModel`, `DrawModel`, `DrawCube` |
+| **raudio** | Sound, music | `LoadSound`, `PlaySound`, `LoadMusicStream` |
+| **rcamera** | Camera control | `UpdateCamera`, `UpdateCameraPro` |
+| **rgestures** | Touch gestures | `IsGestureDetected`, `GetGestureDetected` |
+
+### How to Look Up APIs
+
+1. **For function signatures**: Search `docs/raylib_cheatsheet_v5.md`
+   ```bash
+   # Example: find all Draw functions
+   grep -n "Draw" docs/raylib_cheatsheet_v5.md
+   ```
+
+2. **For struct definitions**: Search `docs/raylib.h`
+   ```bash
+   # Example: find Camera2D definition
+   grep -A 10 "typedef struct Camera2D" docs/raylib.h
+   ```
+
+3. **For enums/flags**: Search `docs/raylib.h`
+   ```bash
+   # Example: find keyboard key codes
+   grep -A 50 "Keyboard keys" docs/raylib.h
+   ```
+
+### Common Patterns
+
+**Game Loop:**
+```c
+InitWindow(width, height, title);
+SetTargetFPS(60);
+while (!WindowShouldClose()) {
+    // Update
+    float dt = GetFrameTime();
+
+    // Draw
+    BeginDrawing();
+    ClearBackground(RAYWHITE);
+    // ... drawing code
+    EndDrawing();
+}
+CloseWindow();
+```
+
+**Loading Resources:**
+```c
+Texture2D tex = LoadTexture("assets/sprite.png");
+// ... use texture
+UnloadTexture(tex);  // Always unload when done
+```
+
+**Input Handling:**
+```c
+if (IsKeyPressed(KEY_SPACE)) { }  // Once per press
+if (IsKeyDown(KEY_RIGHT)) { }     // Continuous
+Vector2 mouse = GetMousePosition();
+```
