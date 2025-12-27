@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include "game.h"
 #include "render.h"
+#include "audio.h"
 
 int main(void)
 {
@@ -15,13 +16,18 @@ int main(void)
     // Initialize rendering
     render_init();
 
+    // Initialize audio
+    audio_init();
+
     // Main game loop
-    while (state.running) {
+    while (!WindowShouldClose() && state.running) {
         game_update(&state);
+        audio_update();
         render_frame(&state);
     }
 
     // Cleanup
+    audio_cleanup();
     render_cleanup();
     game_cleanup(&state);
     CloseWindow();
