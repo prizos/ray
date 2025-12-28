@@ -9,8 +9,8 @@ static void game_init_common(GameState *state)
     float grid_center_x = (GRID_WIDTH * CELL_SIZE) / 2.0f;
     float grid_center_z = (GRID_HEIGHT * CELL_SIZE) / 2.0f;
 
-    // Camera setup
-    state->camera.position = (Vector3){ grid_center_x - 80.0f, 60.0f, grid_center_z + 80.0f };
+    // Camera setup (further back for larger map)
+    state->camera.position = (Vector3){ grid_center_x - 160.0f, 120.0f, grid_center_z + 160.0f };
     state->camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
     state->camera.fovy = 60.0f;
     state->camera.projection = CAMERA_PERSPECTIVE;

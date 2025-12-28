@@ -7,8 +7,8 @@
 
 // ============ TERRAIN CONSTANTS ============
 
-// Terrain dimensions
-#define TERRAIN_RESOLUTION 80
+// Terrain dimensions (doubled for 4x area)
+#define TERRAIN_RESOLUTION 160
 #define TERRAIN_SCALE 2.5f
 #define WATER_LEVEL 3
 

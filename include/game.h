@@ -12,8 +12,8 @@
 
 // ============ GRID CONSTANTS ============
 
-#define GRID_WIDTH 40
-#define GRID_HEIGHT 40
+#define GRID_WIDTH 80
+#define GRID_HEIGHT 80
 #define CELL_SIZE 5.0f
 #define BOX_SIZE 0.4f
 
