@@ -7,12 +7,12 @@
 
 // ============ BEAVER CONSTANTS ============
 
-#define MAX_BEAVERS 20
-#define BEAVER_SPAWN_CHANCE 0.02f      // Chance per frame to spawn when burned trees exist
-#define BEAVER_MOVE_SPEED 8.0f         // Units per second
-#define BEAVER_EAT_INTERVAL 0.3f       // Time between eating voxels
-#define BEAVER_VOXELS_PER_MEAL 3       // Voxels eaten per eating action
-#define BEAVER_MAX_MEALS 5             // Max eating actions before leaving
+#define MAX_BEAVERS 50
+#define BEAVER_SPAWN_CHANCE 0.05f      // Chance per frame to spawn when burned trees exist
+#define BEAVER_MOVE_SPEED 12.0f        // Units per second
+#define BEAVER_EAT_INTERVAL 0.08f      // Time between eating voxels
+#define BEAVER_VOXELS_PER_MEAL 20      // Voxels eaten per eating action
+#define BEAVER_MAX_MEALS 40            // Max eating actions before leaving
 #define BEAVER_SIZE 1.5f               // Render size
 
 // ============ BEAVER TYPES ============
