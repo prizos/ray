@@ -23,7 +23,9 @@ static const Color BURNING_LEAF_COLOR = { 255, 60, 20, 255 };
 static const Color CHARRED_COLOR = { 25, 20, 15, 255 };
 
 // Creature colors
-static const Color BEAVER_COLOR = { 139, 90, 43, 255 };  // Brown beaver
+static const Color BEAVER_BODY_COLOR = { 139, 90, 43, 255 };   // Brown body
+static const Color BEAVER_TAIL_COLOR = { 60, 40, 25, 255 };    // Dark brown tail
+static const Color BEAVER_NOSE_COLOR = { 30, 20, 15, 255 };    // Black nose
 
 // ============ INSTANCING DATA ============
 
@@ -41,7 +43,9 @@ typedef enum {
     GROUP_TERRAIN_UNDERWATER,
     GROUP_TERRAIN_FIRE,
     GROUP_TERRAIN_BURNED,
-    GROUP_BEAVER,
+    GROUP_BEAVER_BODY,
+    GROUP_BEAVER_TAIL,
+    GROUP_BEAVER_NOSE,
     GROUP_COUNT
 } ColorGroup;
 
@@ -112,7 +116,9 @@ void render_init(void)
         UNDERWATER_COLOR,
         FIRE_COLOR,
         { 25, 20, 15, 255 },  // Burned terrain
-        BEAVER_COLOR
+        BEAVER_BODY_COLOR,
+        BEAVER_TAIL_COLOR,
+        BEAVER_NOSE_COLOR
     };
 
     for (int i = 0; i < GROUP_COUNT; i++) {
@@ -147,6 +153,24 @@ static inline void add_instance(ColorGroup group, float x, float y, float z, flo
     m->m1 = 0;     m->m5 = size;  m->m9 = 0;      m->m13 = y;
     m->m2 = 0;     m->m6 = 0;     m->m10 = size;  m->m14 = z;
     m->m3 = 0;     m->m7 = 0;     m->m11 = 0;     m->m15 = 1;
+}
+
+// Add instance with non-uniform scale and Y-axis rotation
+static inline void add_instance_rotated(ColorGroup group, float x, float y, float z,
+                                         float sx, float sy, float sz, float angle) {
+    if (instanceCounts[group] >= MAX_INSTANCES) return;
+
+    Matrix *m = &instanceTransforms[group][instanceCounts[group]++];
+
+    // Build scale * rotateY * translate matrix
+    float c = cosf(angle);
+    float s = sinf(angle);
+
+    // Scale then rotate around Y, then translate
+    m->m0 = sx * c;   m->m4 = 0;    m->m8 = sx * s;    m->m12 = x;
+    m->m1 = 0;        m->m5 = sy;   m->m9 = 0;         m->m13 = y;
+    m->m2 = -sz * s;  m->m6 = 0;    m->m10 = sz * c;   m->m14 = z;
+    m->m3 = 0;        m->m7 = 0;    m->m11 = 0;        m->m15 = 1;
 }
 
 static ColorGroup get_terrain_group(const GameState *state, int x, int z) {
@@ -222,7 +246,69 @@ void render_frame(const GameState *state)
         const Beaver *beaver = &state->beavers[b];
         if (!beaver->active) continue;
 
-        add_instance(GROUP_BEAVER, beaver->x, beaver->y, beaver->z, BEAVER_SIZE);
+        // Calculate facing direction (toward target)
+        float dx = beaver->target_x - beaver->x;
+        float dz = beaver->target_z - beaver->z;
+        float angle = atan2f(dx, dz);  // Angle in XZ plane
+
+        float bx = beaver->x;
+        float by = beaver->y;
+        float bz = beaver->z;
+
+        // Forward and right vectors
+        float fwd_x = sinf(angle);
+        float fwd_z = cosf(angle);
+        float right_x = cosf(angle);
+        float right_z = -sinf(angle);
+
+        // Body (elongated, main mass) - 2.0 x 1.0 x 1.2
+        add_instance_rotated(GROUP_BEAVER_BODY, bx, by, bz, 2.0f, 1.0f, 1.2f, angle);
+
+        // Head (front, smaller) - 0.8 cube, offset forward
+        float head_x = bx + fwd_x * 1.2f;
+        float head_y = by + 0.2f;
+        float head_z = bz + fwd_z * 1.2f;
+        add_instance_rotated(GROUP_BEAVER_BODY, head_x, head_y, head_z, 0.8f, 0.8f, 0.8f, angle);
+
+        // Nose (front of head) - small black cube
+        float nose_x = head_x + fwd_x * 0.5f;
+        float nose_y = head_y - 0.1f;
+        float nose_z = head_z + fwd_z * 0.5f;
+        add_instance_rotated(GROUP_BEAVER_NOSE, nose_x, nose_y, nose_z, 0.25f, 0.2f, 0.3f, angle);
+
+        // Tail (back, flat paddle) - 1.4 x 0.15 x 0.7
+        float tail_x = bx - fwd_x * 1.6f;
+        float tail_y = by - 0.3f;
+        float tail_z = bz - fwd_z * 1.6f;
+        add_instance_rotated(GROUP_BEAVER_TAIL, tail_x, tail_y, tail_z, 1.4f, 0.15f, 0.7f, angle);
+
+        // Four legs (small cubes under body corners)
+        float leg_h = 0.4f;
+        float leg_w = 0.3f;
+        float leg_y = by - 0.6f;
+        float leg_fwd = 0.6f;   // Forward offset
+        float leg_side = 0.45f; // Side offset
+
+        // Front-left leg
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            bx + fwd_x * leg_fwd - right_x * leg_side, leg_y,
+            bz + fwd_z * leg_fwd - right_z * leg_side,
+            leg_w, leg_h, leg_w, angle);
+        // Front-right leg
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            bx + fwd_x * leg_fwd + right_x * leg_side, leg_y,
+            bz + fwd_z * leg_fwd + right_z * leg_side,
+            leg_w, leg_h, leg_w, angle);
+        // Back-left leg
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            bx - fwd_x * leg_fwd - right_x * leg_side, leg_y,
+            bz - fwd_z * leg_fwd - right_z * leg_side,
+            leg_w, leg_h, leg_w, angle);
+        // Back-right leg
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            bx - fwd_x * leg_fwd + right_x * leg_side, leg_y,
+            bz - fwd_z * leg_fwd + right_z * leg_side,
+            leg_w, leg_h, leg_w, angle);
     }
 
     // ========== DRAW ==========
@@ -275,7 +361,7 @@ void render_frame(const GameState *state)
     DrawText("Scroll - Zoom, SPACE - Pause, R - Reset", 20, 102, 12, LIGHTGRAY);
 
     DrawText(TextFormat("Trees: %d", state->tree_count), 20, 125, 14, WHITE);
-    DrawText(TextFormat("Beavers: %d", state->beaver_count), 100, 125, 14, BEAVER_COLOR);
+    DrawText(TextFormat("Beavers: %d", state->beaver_count), 100, 125, 14, BEAVER_BODY_COLOR);
     DrawText(state->paused ? "PAUSED" : "GROWING...", 190, 125, 14,
              state->paused ? YELLOW : GREEN);
 
