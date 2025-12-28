@@ -1,135 +1,204 @@
 #include "render.h"
+#include "raymath.h"
+#include <stdlib.h>
+#include <string.h>
 
-// Terrain colors - muted earth tones
-static const Color GRASS_LOW_COLOR = { 141, 168, 104, 255 }; // Sage green (valleys)
-static const Color GRASS_HIGH_COLOR = { 169, 186, 131, 255 };// Lighter green (hills)
-static const Color ROCK_COLOR = { 158, 154, 146, 255 };      // Grey stone for peaks
+// ============ COLOR DEFINITIONS ============
 
-// Burned terrain colors
-static const Color FIRE_COLOR = { 255, 100, 20, 255 };       // Bright orange fire
+// Terrain colors
+static const Color GRASS_LOW_COLOR = { 141, 168, 104, 255 };
+static const Color GRASS_HIGH_COLOR = { 169, 186, 131, 255 };
+static const Color ROCK_COLOR = { 158, 154, 146, 255 };
+static const Color UNDERWATER_COLOR = { 120, 110, 90, 255 };
+static const Color FIRE_COLOR = { 255, 100, 20, 255 };
+static const Color SKY_COLOR = { 135, 206, 235, 255 };
+static const Color WATER_COLOR = { 40, 120, 180, 140 };
 
-// Tree part colors - warm browns and vibrant green
-static const Color TRUNK_COLOR = { 72, 50, 35, 255 };        // Dark brown
-static const Color BRANCH_COLOR = { 92, 64, 45, 255 };       // Medium brown
-static const Color LEAF_COLOR = { 50, 180, 70, 255 };        // Vibrant green
+// Tree colors
+static const Color TRUNK_COLOR = { 72, 50, 35, 255 };
+static const Color BRANCH_COLOR = { 92, 64, 45, 255 };
+static const Color LEAF_COLOR = { 50, 180, 70, 255 };
+static const Color BURNING_LEAF_COLOR = { 255, 60, 20, 255 };
+static const Color CHARRED_COLOR = { 25, 20, 15, 255 };
 
-// Burned tree colors
-static const Color BURNING_LEAF_COLOR = { 255, 60, 20, 255 };  // Red/orange burning leaves
-static const Color CHARRED_COLOR = { 25, 20, 15, 255 };        // Charred black wood
+// ============ INSTANCING DATA ============
+
+// Color groups for batching
+typedef enum {
+    GROUP_TRUNK,
+    GROUP_BRANCH,
+    GROUP_LEAF,
+    GROUP_BURNING_WOOD,
+    GROUP_BURNING_LEAF,
+    GROUP_CHARRED,
+    GROUP_TERRAIN_LOW,
+    GROUP_TERRAIN_HIGH,
+    GROUP_TERRAIN_ROCK,
+    GROUP_TERRAIN_UNDERWATER,
+    GROUP_TERRAIN_FIRE,
+    GROUP_TERRAIN_BURNED,
+    GROUP_COUNT
+} ColorGroup;
+
+// Max instances per group
+#define MAX_INSTANCES (MAX_TREES * MAX_VOXELS_PER_TREE + TERRAIN_RESOLUTION * TERRAIN_RESOLUTION)
+
+// Instance data
+static Mesh cubeMesh;
+static Material cubeMaterials[GROUP_COUNT];
+static Matrix *instanceTransforms[GROUP_COUNT];
+static int instanceCounts[GROUP_COUNT];
+static bool initialized = false;
+
+// ============ INITIALIZATION ============
 
 void render_init(void)
 {
-    // Nothing to initialize
+    if (initialized) return;
+
+    // Create cube mesh (auto-uploads to GPU)
+    cubeMesh = GenMeshCube(1.0f, 1.0f, 1.0f);
+
+    // Create materials for each color group
+    Color groupColors[GROUP_COUNT] = {
+        TRUNK_COLOR,
+        BRANCH_COLOR,
+        LEAF_COLOR,
+        FIRE_COLOR,
+        BURNING_LEAF_COLOR,
+        CHARRED_COLOR,
+        GRASS_LOW_COLOR,
+        GRASS_HIGH_COLOR,
+        ROCK_COLOR,
+        UNDERWATER_COLOR,
+        FIRE_COLOR,
+        { 25, 20, 15, 255 }  // Burned terrain
+    };
+
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        cubeMaterials[i] = LoadMaterialDefault();
+        cubeMaterials[i].maps[MATERIAL_MAP_DIFFUSE].color = groupColors[i];
+
+        // Allocate transform arrays
+        instanceTransforms[i] = (Matrix *)malloc(sizeof(Matrix) * MAX_INSTANCES);
+        instanceCounts[i] = 0;
+    }
+
+    initialized = true;
 }
+
+// ============ HELPER FUNCTIONS ============
+
+static inline void add_instance(ColorGroup group, float x, float y, float z, float size) {
+    if (instanceCounts[group] >= MAX_INSTANCES) return;
+
+    Matrix *m = &instanceTransforms[group][instanceCounts[group]++];
+
+    // Build scale + translate matrix
+    // Raylib Matrix: m0,m5,m10 = diagonal (scale), m12,m13,m14 = translation
+    m->m0 = size;  m->m4 = 0;     m->m8 = 0;      m->m12 = x;
+    m->m1 = 0;     m->m5 = size;  m->m9 = 0;      m->m13 = y;
+    m->m2 = 0;     m->m6 = 0;     m->m10 = size;  m->m14 = z;
+    m->m3 = 0;     m->m7 = 0;     m->m11 = 0;     m->m15 = 1;
+}
+
+static ColorGroup get_terrain_group(const GameState *state, int x, int z) {
+    TerrainBurnState burn = state->terrain_burn[x][z];
+    int height = state->terrain_height[x][z];
+
+    if (burn == TERRAIN_BURNING) return GROUP_TERRAIN_FIRE;
+    if (burn == TERRAIN_BURNED) return GROUP_TERRAIN_BURNED;
+    if (height >= 8) return GROUP_TERRAIN_ROCK;
+    if (height >= 5) return GROUP_TERRAIN_HIGH;
+    if (height < WATER_LEVEL) return GROUP_TERRAIN_UNDERWATER;
+    return GROUP_TERRAIN_LOW;
+}
+
+static ColorGroup get_voxel_group(const TreeVoxel *voxel) {
+    if (voxel->burn_state == VOXEL_BURNED) return GROUP_CHARRED;
+    if (voxel->burn_state == VOXEL_BURNING) {
+        return (voxel->type == VOXEL_LEAF) ? GROUP_BURNING_LEAF : GROUP_BURNING_WOOD;
+    }
+    switch (voxel->type) {
+        case VOXEL_TRUNK:  return GROUP_TRUNK;
+        case VOXEL_BRANCH: return GROUP_BRANCH;
+        default:           return GROUP_LEAF;
+    }
+}
+
+// ============ MAIN RENDER ============
 
 void render_frame(const GameState *state)
 {
-    BeginDrawing();
-    ClearBackground((Color){ 135, 206, 235, 255 });  // Sky blue
+    // Reset instance counts
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        instanceCounts[i] = 0;
+    }
 
-    BeginMode3D(state->camera);
-
-    // Draw voxel terrain with hills and valleys
+    // ========== COLLECT TERRAIN INSTANCES ==========
     for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
         for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
             int height = state->terrain_height[x][z];
             float world_x = x * TERRAIN_SCALE;
+            float world_y = height * TERRAIN_SCALE;
             float world_z = z * TERRAIN_SCALE;
 
-            // Check burn state first
-            Color surface_col;
-            TerrainBurnState burn_state = state->terrain_burn[x][z];
-
-            if (burn_state == TERRAIN_BURNING) {
-                // Burning - bright fire color with random variation
-                surface_col = FIRE_COLOR;
-            } else if (burn_state == TERRAIN_BURNED) {
-                // Burned - randomized black/charred color
-                int shade = 20 + (((x * 7) ^ (z * 13)) % 25);
-                surface_col = (Color){ shade, shade - 5, shade - 10, 255 };
-            } else if (height >= 8) {
-                surface_col = ROCK_COLOR;           // Rocky peaks
-            } else if (height >= 5) {
-                surface_col = GRASS_HIGH_COLOR;     // Highland grass
-            } else if (height < WATER_LEVEL) {
-                // Underwater terrain - sandy/muddy color
-                surface_col = (Color){ 120, 110, 90, 255 };
-            } else {
-                surface_col = GRASS_LOW_COLOR;      // Lowland grass
-            }
-
-            // Draw only the top terrain voxel for performance
-            Vector3 pos = { world_x, height * TERRAIN_SCALE, world_z };
-            DrawCube(pos, TERRAIN_SCALE, TERRAIN_SCALE, TERRAIN_SCALE, surface_col);
+            ColorGroup group = get_terrain_group(state, x, z);
+            add_instance(group, world_x, world_y, world_z, TERRAIN_SCALE);
         }
     }
 
-    // Draw water as a single smooth transparent plane
-    float water_y = WATER_LEVEL * TERRAIN_SCALE + 0.3f;
-    float terrain_size = TERRAIN_RESOLUTION * TERRAIN_SCALE;
-    float water_center = terrain_size / 2.0f;
-
-    // Draw water plane with transparency
-    DrawPlane(
-        (Vector3){ water_center, water_y, water_center },
-        (Vector2){ terrain_size, terrain_size },
-        (Color){ 40, 120, 180, 140 }  // Semi-transparent blue
-    );
-
-    // Draw all trees
+    // ========== COLLECT TREE VOXEL INSTANCES ==========
     for (int t = 0; t < state->tree_count; t++) {
         const Tree *tree = &state->trees[t];
         if (!tree->active) continue;
 
         float base_x = tree->base_x * CELL_SIZE + CELL_SIZE / 2.0f;
-        float base_y = tree->base_y * TERRAIN_SCALE;  // Terrain height offset
+        float base_y = tree->base_y * TERRAIN_SCALE;
         float base_z = tree->base_z * CELL_SIZE + CELL_SIZE / 2.0f;
 
-        // Draw each voxel
         for (int v = 0; v < tree->voxel_count; v++) {
             const TreeVoxel *voxel = &tree->voxels[v];
             if (!voxel->active) continue;
 
-            Vector3 pos = {
-                base_x + voxel->x * BOX_SIZE,
-                base_y + voxel->y * BOX_SIZE + BOX_SIZE / 2.0f,
-                base_z + voxel->z * BOX_SIZE
-            };
+            float px = base_x + voxel->x * BOX_SIZE;
+            float py = base_y + voxel->y * BOX_SIZE + BOX_SIZE / 2.0f;
+            float pz = base_z + voxel->z * BOX_SIZE;
 
-            // Color based on voxel type and burn state
-            Color col;
-            if (voxel->burn_state == VOXEL_BURNED) {
-                // Charred black wood
-                col = CHARRED_COLOR;
-            } else if (voxel->burn_state == VOXEL_BURNING) {
-                if (voxel->type == VOXEL_LEAF) {
-                    // Burning leaves are red/orange
-                    col = BURNING_LEAF_COLOR;
-                } else {
-                    // Burning wood is orange
-                    col = FIRE_COLOR;
-                }
-            } else {
-                // Normal colors
-                switch (voxel->type) {
-                    case VOXEL_TRUNK:  col = TRUNK_COLOR; break;
-                    case VOXEL_BRANCH: col = BRANCH_COLOR; break;
-                    case VOXEL_LEAF:
-                    default:           col = LEAF_COLOR; break;
-                }
-            }
-
-            DrawCube(pos, BOX_SIZE, BOX_SIZE, BOX_SIZE, col);
+            ColorGroup group = get_voxel_group(voxel);
+            add_instance(group, px, py, pz, BOX_SIZE);
         }
     }
 
+    // ========== DRAW ==========
+    BeginDrawing();
+    ClearBackground(SKY_COLOR);
+
+    BeginMode3D(state->camera);
+
+    // Draw all groups using DrawMesh (DrawMeshInstanced not supported on macOS/Metal)
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        for (int j = 0; j < instanceCounts[i]; j++) {
+            DrawMesh(cubeMesh, cubeMaterials[i], instanceTransforms[i][j]);
+        }
+    }
+
+    // Draw water plane
+    float water_y = WATER_LEVEL * TERRAIN_SCALE + 0.3f;
+    float terrain_size = TERRAIN_RESOLUTION * TERRAIN_SCALE;
+    float water_center = terrain_size / 2.0f;
+    DrawPlane(
+        (Vector3){ water_center, water_y, water_center },
+        (Vector2){ terrain_size, terrain_size },
+        WATER_COLOR
+    );
+
     EndMode3D();
 
-    // UI
+    // ========== UI ==========
     DrawRectangle(10, 10, 310, 195, Fade(BLACK, 0.7f));
     DrawText("Tree Growth Simulator", 20, 15, 20, WHITE);
 
-    // Current tool indicator
     const char *tool_name = (state->current_tool == TOOL_BURN) ? "BURN" : "TREE";
     Color tool_color = (state->current_tool == TOOL_BURN) ? ORANGE : GREEN;
     DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
@@ -144,7 +213,7 @@ void render_frame(const GameState *state)
     DrawText(state->paused ? "PAUSED" : "GROWING...", 120, 125, 14,
              state->paused ? YELLOW : GREEN);
 
-    // Use cached counts
+    // Voxel counts
     int total_voxels = 0;
     int trunk_count = 0, branch_count = 0, leaf_count = 0;
     for (int t = 0; t < state->tree_count; t++) {
@@ -153,10 +222,16 @@ void render_frame(const GameState *state)
         branch_count += state->trees[t].branch_count;
         leaf_count += state->trees[t].leaf_count;
     }
-    DrawText(TextFormat("Voxels: %d (trees:%d)", total_voxels, state->tree_count), 20, 145, 14,
+    DrawText(TextFormat("Voxels: %d", total_voxels), 20, 145, 14,
              total_voxels > 0 ? WHITE : RED);
     DrawText(TextFormat("Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
              20, 165, 11, LIGHTGRAY);
+
+    // Draw calls info
+    int total_instances = 0;
+    for (int i = 0; i < GROUP_COUNT; i++) total_instances += instanceCounts[i];
+    DrawText(TextFormat("Draw calls: %d (instances: %d)", GROUP_COUNT, total_instances),
+             20, 180, 10, GRAY);
 
     // Legend
     DrawRectangle(SCREEN_WIDTH - 200, 10, 190, 80, Fade(BLACK, 0.7f));
@@ -179,5 +254,14 @@ void render_frame(const GameState *state)
 
 void render_cleanup(void)
 {
-    // Nothing to cleanup
+    if (!initialized) return;
+
+    UnloadMesh(cubeMesh);
+
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        UnloadMaterial(cubeMaterials[i]);
+        free(instanceTransforms[i]);
+    }
+
+    initialized = false;
 }
