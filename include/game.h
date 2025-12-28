@@ -60,6 +60,7 @@ typedef struct GameState {
 // ============ GAME FUNCTIONS ============
 
 void game_init(GameState *state);
+void game_init_with_trees(GameState *state, int num_trees);
 void game_update(GameState *state);
 void game_cleanup(GameState *state);
 

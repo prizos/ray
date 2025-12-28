@@ -18,3 +18,7 @@ Thumbs.db
 # Debug
 *.dSYM/
 core
+
+# Benchmarks
+benchmarks/
+benchmark_*.txt

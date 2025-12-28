@@ -4,7 +4,7 @@
 
 // ============ INITIALIZATION ============
 
-void game_init(GameState *state)
+static void game_init_common(GameState *state)
 {
     float grid_center_x = (GRID_WIDTH * CELL_SIZE) / 2.0f;
     float grid_center_z = (GRID_HEIGHT * CELL_SIZE) / 2.0f;
@@ -51,8 +51,14 @@ void game_init(GameState *state)
         TraceLog(LOG_INFO, "Allocated %zu bytes for %d trees", sizeof(Tree) * MAX_TREES, MAX_TREES);
     }
     state->tree_count = 0;
+}
 
-    // Initial trees
+void game_init(GameState *state)
+{
+    game_init_common(state);
+    if (!state->running) return;
+
+    // Default: grid-spaced trees
     int spacing = 10;
     for (int x = 5; x < GRID_WIDTH - 5; x += spacing) {
         for (int z = 5; z < GRID_HEIGHT - 5; z += spacing) {
@@ -70,6 +76,40 @@ void game_init(GameState *state)
             state->tree_count++;
         }
     }
+}
+
+void game_init_with_trees(GameState *state, int num_trees)
+{
+    game_init_common(state);
+    if (!state->running) return;
+
+    if (num_trees > MAX_TREES) num_trees = MAX_TREES;
+    if (num_trees < 0) num_trees = 0;
+
+    // Place trees in a grid pattern to fit requested count
+    int placed = 0;
+    int attempts = 0;
+    int max_attempts = num_trees * 10;
+
+    while (placed < num_trees && attempts < max_attempts) {
+        int x = 2 + (attempts * 7) % (GRID_WIDTH - 4);
+        int z = 2 + (attempts * 11) % (GRID_HEIGHT - 4);
+
+        int terrain_x = (int)(x * CELL_SIZE / TERRAIN_SCALE);
+        int terrain_z = (int)(z * CELL_SIZE / TERRAIN_SCALE);
+        if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+        if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+        int ground_height = state->terrain_height[terrain_x][terrain_z];
+
+        if (ground_height >= WATER_LEVEL) {
+            tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
+            state->tree_count++;
+            placed++;
+        }
+        attempts++;
+    }
+
+    TraceLog(LOG_INFO, "Initialized %d trees (requested %d)", placed, num_trees);
 }
 
 // ============ UPDATE ============
