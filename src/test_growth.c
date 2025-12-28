@@ -47,8 +47,8 @@ static void simulate_growth(Tree *tree, int iterations) {
         float influence_radius = 15.0f;
         float kill_radius = 4.0f;
 
-        for (int b = 0; b < tree->branch_count; b++) {
-            GrowthTip *tip = &tree->branches[b];
+        for (int b = 0; b < tree->sc_branch_count; b++) {
+            GrowthTip *tip = &tree->sc_branches[b];
             if (!tip->active) continue;
 
             // Find CLOSEST attractor
@@ -109,8 +109,8 @@ static void simulate_growth(Tree *tree, int iterations) {
                     }
 
                     // Branch spawning - outward
-                    if ((float)rand() / RAND_MAX < 0.25f && tree->branch_count < MAX_TIPS_PER_TREE) {
-                        GrowthTip *new_tip = &tree->branches[tree->branch_count++];
+                    if ((float)rand() / RAND_MAX < 0.25f && tree->sc_branch_count < MAX_TIPS_PER_TREE) {
+                        GrowthTip *new_tip = &tree->sc_branches[tree->sc_branch_count++];
                         new_tip->x = tip->x;
                         new_tip->y = tip->y;
                         new_tip->z = tip->z;
@@ -306,15 +306,15 @@ static void init_test_tree(Tree *tree) {
     for (int i = 0; i < num_initial_branches; i++) {
         float angle = (float)i * 2.0f * 3.14159f / num_initial_branches;
         float outward = 3.0f;
-        tree->branches[i].x = cosf(angle) * outward;
-        tree->branches[i].y = 18;
-        tree->branches[i].z = sinf(angle) * outward;
-        tree->branches[i].dx = cosf(angle) * 0.7f;
-        tree->branches[i].dy = 0.5f;
-        tree->branches[i].dz = sinf(angle) * 0.7f;
-        tree->branches[i].generation = 0;
-        tree->branches[i].active = true;
-        tree->branch_count++;
+        tree->sc_branches[i].x = cosf(angle) * outward;
+        tree->sc_branches[i].y = 18;
+        tree->sc_branches[i].z = sinf(angle) * outward;
+        tree->sc_branches[i].dx = cosf(angle) * 0.7f;
+        tree->sc_branches[i].dy = 0.5f;
+        tree->sc_branches[i].dz = sinf(angle) * 0.7f;
+        tree->sc_branches[i].generation = 0;
+        tree->sc_branches[i].active = true;
+        tree->sc_branch_count++;
     }
 
     // Build trunk (shorter)
@@ -350,7 +350,7 @@ int main(void) {
 
         printf("\nInitial voxel count: %d\n", tree.voxel_count);
         printf("Attractor count: %d\n", tree.attractor_count);
-        printf("Branch tip count: %d\n", tree.branch_count);
+        printf("Branch tip count: %d\n", tree.sc_branch_count);
 
         // Simulate growth
         simulate_growth(&tree, TEST_GROWTH_ITERATIONS);

@@ -71,10 +71,17 @@ test: $(BUILD_DIR) $(TEST_TARGETS) test-growth
 $(BUILD_DIR)/test_%: $(TEST_DIR)/test_%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
-# Growth distribution test (no raylib graphics needed)
+# Growth distribution test (uses tree module)
 test-growth: $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DTEST_BUILD $(SRC_DIR)/test_growth.c -o $(BUILD_DIR)/test_growth -lm
+	$(CC) $(CFLAGS) -DTEST_BUILD $(SRC_DIR)/test_growth.c $(SRC_DIR)/tree.c -o $(BUILD_DIR)/test_growth $(LDFLAGS)
 	./$(BUILD_DIR)/test_growth
+
+# Unit tests for modules
+test-unit: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DTEST_BUILD $(TEST_DIR)/test_tree.c $(SRC_DIR)/tree.c -o $(BUILD_DIR)/test_tree $(LDFLAGS)
+	$(CC) $(CFLAGS) -DTEST_BUILD $(TEST_DIR)/test_terrain.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c -o $(BUILD_DIR)/test_terrain $(LDFLAGS)
+	./$(BUILD_DIR)/test_tree
+	./$(BUILD_DIR)/test_terrain
 
 # Clean
 clean:

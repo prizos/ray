@@ -150,7 +150,7 @@ void render_frame(const GameState *state)
     for (int t = 0; t < state->tree_count; t++) {
         total_voxels += state->trees[t].voxel_count;
         trunk_count += state->trees[t].trunk_count;
-        branch_count += state->trees[t].branch_count_cached;
+        branch_count += state->trees[t].branch_count;
         leaf_count += state->trees[t].leaf_count;
     }
     DrawText(TextFormat("Voxels: %d (trees:%d)", total_voxels, state->tree_count), 20, 145, 14,
