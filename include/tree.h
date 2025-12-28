@@ -148,6 +148,9 @@ bool tree_add_voxel(Tree *tree, int x, int y, int z, VoxelType type);
 // Check if a voxel exists at position
 bool tree_voxel_exists(Tree *tree, int x, int y, int z);
 
+// Get voxel at position (returns NULL if not found)
+TreeVoxel *tree_get_voxel_at(Tree *tree, int x, int y, int z);
+
 // Clear the spatial hash table
 void tree_hash_clear(Tree *tree);
 

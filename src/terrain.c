@@ -44,13 +44,15 @@ void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOL
                          const int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          Tree *trees, int tree_count) {
 
+    // ========== TERRAIN FIRE SPREAD ==========
+    // Only update burning cells, O(burning_cells)
     for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
         for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
             if (burn[x][z] != TERRAIN_BURNING) continue;
 
             timers[x][z] -= BURN_SPREAD_INTERVAL;
 
-            // Spread to neighbors
+            // Spread to 8 neighbors - O(8)
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
                     if (dx == 0 && dz == 0) continue;
@@ -73,38 +75,51 @@ void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOL
             if (timers[x][z] <= 0) {
                 burn[x][z] = TERRAIN_BURNED;
             }
+        }
+    }
 
-            // Burn nearby trees
-            float world_x = x * TERRAIN_SCALE;
-            float world_z = z * TERRAIN_SCALE;
+    // ========== TREE IGNITION FROM TERRAIN ==========
+    // Iterate trees first, check their local terrain - O(trees) instead of O(terrain * trees)
+    for (int t = 0; t < tree_count; t++) {
+        Tree *tree = &trees[t];
+        if (!tree->active) continue;
 
-            for (int t = 0; t < tree_count; t++) {
-                Tree *tree = &trees[t];
-                if (!tree->active) continue;
+        // Convert tree position to terrain coordinates
+        int tree_terrain_x = (int)(tree->base_x * CELL_SIZE / TERRAIN_SCALE);
+        int tree_terrain_z = (int)(tree->base_z * CELL_SIZE / TERRAIN_SCALE);
 
-                float tree_world_x = tree->base_x * CELL_SIZE;
-                float tree_world_z = tree->base_z * CELL_SIZE;
-                float dist = sqrtf((tree_world_x - world_x) * (tree_world_x - world_x) +
-                                  (tree_world_z - world_z) * (tree_world_z - world_z));
-
-                if (dist < TERRAIN_SCALE * BURN_TREE_IGNITE_DISTANCE) {
-                    for (int v = 0; v < tree->voxel_count; v++) {
-                        TreeVoxel *voxel = &tree->voxels[v];
-                        if (!voxel->active) continue;
-
-                        if (voxel->burn_state == VOXEL_NORMAL) {
-                            if (voxel->y < BURN_TREE_LOW_HEIGHT || randf() < BURN_TREE_RANDOM_CHANCE) {
-                                voxel->burn_state = VOXEL_BURNING;
-                                voxel->burn_timer = BURN_DURATION;
-                            }
-                        }
+        // Check nearby terrain cells for fire (small radius)
+        bool near_fire = false;
+        int check_radius = (int)(BURN_TREE_IGNITE_DISTANCE + 1);
+        for (int dx = -check_radius; dx <= check_radius && !near_fire; dx++) {
+            for (int dz = -check_radius; dz <= check_radius && !near_fire; dz++) {
+                int tx = tree_terrain_x + dx;
+                int tz = tree_terrain_z + dz;
+                if (tx >= 0 && tx < TERRAIN_RESOLUTION &&
+                    tz >= 0 && tz < TERRAIN_RESOLUTION) {
+                    if (burn[tx][tz] == TERRAIN_BURNING) {
+                        near_fire = true;
                     }
+                }
+            }
+        }
+
+        // If near fire, ignite low voxels
+        if (near_fire) {
+            for (int v = 0; v < tree->voxel_count; v++) {
+                TreeVoxel *voxel = &tree->voxels[v];
+                if (!voxel->active || voxel->burn_state != VOXEL_NORMAL) continue;
+
+                if (voxel->y < BURN_TREE_LOW_HEIGHT || randf() < BURN_TREE_RANDOM_CHANCE) {
+                    voxel->burn_state = VOXEL_BURNING;
+                    voxel->burn_timer = BURN_DURATION;
                 }
             }
         }
     }
 
-    // Update tree voxel burn states
+    // ========== VOXEL FIRE SPREAD (Using spatial hash) ==========
+    // O(trees * burning_voxels * 27) instead of O(trees * voxels^2)
     for (int t = 0; t < tree_count; t++) {
         Tree *tree = &trees[t];
         if (!tree->active) continue;
@@ -115,19 +130,22 @@ void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOL
 
             voxel->burn_timer -= BURN_SPREAD_INTERVAL;
 
-            // Spread fire within tree
-            for (int v2 = 0; v2 < tree->voxel_count; v2++) {
-                TreeVoxel *other = &tree->voxels[v2];
-                if (!other->active || other->burn_state != VOXEL_NORMAL) continue;
+            // Spread fire to neighbors using spatial hash - O(27) lookups
+            for (int dy = 0; dy <= 2; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
 
-                int dx = abs(other->x - voxel->x);
-                int dy = other->y - voxel->y;
-                int dz = abs(other->z - voxel->z);
+                        TreeVoxel *neighbor = tree_get_voxel_at(tree,
+                            voxel->x + dx, voxel->y + dy, voxel->z + dz);
 
-                if (dx <= 1 && dz <= 1 && dy >= 0 && dy <= 2) {
-                    if (randf() < BURN_VOXEL_SPREAD_CHANCE) {
-                        other->burn_state = VOXEL_BURNING;
-                        other->burn_timer = BURN_DURATION;
+                        if (neighbor && neighbor->active &&
+                            neighbor->burn_state == VOXEL_NORMAL) {
+                            if (randf() < BURN_VOXEL_SPREAD_CHANCE) {
+                                neighbor->burn_state = VOXEL_BURNING;
+                                neighbor->burn_timer = BURN_DURATION;
+                            }
+                        }
                     }
                 }
             }

@@ -46,6 +46,24 @@ bool tree_voxel_exists(Tree *tree, int x, int y, int z) {
     return false;
 }
 
+TreeVoxel *tree_get_voxel_at(Tree *tree, int x, int y, int z) {
+    int key = tree_pack_key(x, y, z);
+    int idx = tree_hash_index(key);
+
+    // Linear probing
+    for (int i = 0; i < VOXEL_HASH_SIZE; i++) {
+        int probe = (idx + i) % VOXEL_HASH_SIZE;
+        if (tree->voxel_hash[probe].key == -1) {
+            return NULL;
+        }
+        if (tree->voxel_hash[probe].key == key) {
+            int voxel_idx = tree->voxel_hash[probe].voxel_idx;
+            return &tree->voxels[voxel_idx];
+        }
+    }
+    return NULL;
+}
+
 // Add voxel to hash table
 static void tree_hash_insert(Tree *tree, int x, int y, int z, int voxel_idx) {
     int key = tree_pack_key(x, y, z);
