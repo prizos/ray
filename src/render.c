@@ -2,6 +2,7 @@
 #include "raymath.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 // ============ COLOR DEFINITIONS ============
 
@@ -45,10 +46,12 @@ typedef enum {
 
 // Instance data
 static Mesh cubeMesh;
+static Shader instancingShader;
 static Material cubeMaterials[GROUP_COUNT];
 static Matrix *instanceTransforms[GROUP_COUNT];
 static int instanceCounts[GROUP_COUNT];
 static bool initialized = false;
+static bool useInstancing = false;
 
 // ============ INITIALIZATION ============
 
@@ -56,8 +59,40 @@ void render_init(void)
 {
     if (initialized) return;
 
-    // Create cube mesh (auto-uploads to GPU)
+    // Create cube mesh
     cubeMesh = GenMeshCube(1.0f, 1.0f, 1.0f);
+
+    // Try to load instancing shader
+    // GLSL 330 for OpenGL 3.3+ (macOS uses OpenGL 4.1 which supports GLSL 330)
+    instancingShader = LoadShader("resources/shaders/instancing.vs",
+                                   "resources/shaders/instancing.fs");
+
+    // Check if shader loaded successfully
+    if (instancingShader.id > 0) {
+        // Set shader locations
+        // MVP matrix location (uniform)
+        instancingShader.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(instancingShader, "mvp");
+
+        // Instance transform location (vertex attribute, not uniform!)
+        // This is critical: use GetShaderLocationAttrib for vertex attributes
+        instancingShader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(instancingShader, "instanceTransform");
+
+        if (instancingShader.locs[SHADER_LOC_MATRIX_MVP] != -1 &&
+            instancingShader.locs[SHADER_LOC_MATRIX_MODEL] != -1) {
+            useInstancing = true;
+            TraceLog(LOG_INFO, "RENDER: Instancing shader loaded successfully");
+            TraceLog(LOG_INFO, "RENDER: MVP location: %d, instanceTransform location: %d",
+                     instancingShader.locs[SHADER_LOC_MATRIX_MVP],
+                     instancingShader.locs[SHADER_LOC_MATRIX_MODEL]);
+        } else {
+            TraceLog(LOG_WARNING, "RENDER: Shader locations not found, falling back to non-instanced rendering");
+            UnloadShader(instancingShader);
+            useInstancing = false;
+        }
+    } else {
+        TraceLog(LOG_WARNING, "RENDER: Failed to load instancing shader, using fallback");
+        useInstancing = false;
+    }
 
     // Create materials for each color group
     Color groupColors[GROUP_COUNT] = {
@@ -79,12 +114,19 @@ void render_init(void)
         cubeMaterials[i] = LoadMaterialDefault();
         cubeMaterials[i].maps[MATERIAL_MAP_DIFFUSE].color = groupColors[i];
 
+        // Assign instancing shader to material if available
+        if (useInstancing) {
+            cubeMaterials[i].shader = instancingShader;
+        }
+
         // Allocate transform arrays
         instanceTransforms[i] = (Matrix *)malloc(sizeof(Matrix) * MAX_INSTANCES);
         instanceCounts[i] = 0;
     }
 
     initialized = true;
+    TraceLog(LOG_INFO, "RENDER: Initialized with %s rendering",
+             useInstancing ? "INSTANCED" : "FALLBACK");
 }
 
 // ============ HELPER FUNCTIONS ============
@@ -176,10 +218,20 @@ void render_frame(const GameState *state)
 
     BeginMode3D(state->camera);
 
-    // Draw all groups using DrawMesh (DrawMeshInstanced not supported on macOS/Metal)
-    for (int i = 0; i < GROUP_COUNT; i++) {
-        for (int j = 0; j < instanceCounts[i]; j++) {
-            DrawMesh(cubeMesh, cubeMaterials[i], instanceTransforms[i][j]);
+    // Draw all groups
+    if (useInstancing) {
+        // GPU instanced rendering - one draw call per color group
+        for (int i = 0; i < GROUP_COUNT; i++) {
+            if (instanceCounts[i] > 0) {
+                DrawMeshInstanced(cubeMesh, cubeMaterials[i], instanceTransforms[i], instanceCounts[i]);
+            }
+        }
+    } else {
+        // Fallback: individual DrawMesh calls
+        for (int i = 0; i < GROUP_COUNT; i++) {
+            for (int j = 0; j < instanceCounts[i]; j++) {
+                DrawMesh(cubeMesh, cubeMaterials[i], instanceTransforms[i][j]);
+            }
         }
     }
 
@@ -227,11 +279,14 @@ void render_frame(const GameState *state)
     DrawText(TextFormat("Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
              20, 165, 11, LIGHTGRAY);
 
-    // Draw calls info
+    // Rendering info
     int total_instances = 0;
     for (int i = 0; i < GROUP_COUNT; i++) total_instances += instanceCounts[i];
-    DrawText(TextFormat("Draw calls: %d (instances: %d)", GROUP_COUNT, total_instances),
-             20, 180, 10, GRAY);
+    DrawText(TextFormat("%s: %d calls (%d instances)",
+             useInstancing ? "Instanced" : "Fallback",
+             useInstancing ? GROUP_COUNT : total_instances,
+             total_instances),
+             20, 180, 10, useInstancing ? GREEN : ORANGE);
 
     // Legend
     DrawRectangle(SCREEN_WIDTH - 200, 10, 190, 80, Fade(BLACK, 0.7f));
@@ -257,6 +312,10 @@ void render_cleanup(void)
     if (!initialized) return;
 
     UnloadMesh(cubeMesh);
+
+    if (useInstancing) {
+        UnloadShader(instancingShader);
+    }
 
     for (int i = 0; i < GROUP_COUNT; i++) {
         UnloadMaterial(cubeMaterials[i]);
