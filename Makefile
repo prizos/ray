@@ -100,6 +100,31 @@ test-unit: $(BUILD_DIR)
 	./$(BUILD_DIR)/test_tree
 	./$(BUILD_DIR)/test_terrain
 
+# ============ MATTER SYSTEM TESTS ============
+# Tiered testing: unit -> integration -> system
+
+# Matter unit tests (isolated function testing)
+test-matter-unit: $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/test_matter_unit.c -o $(BUILD_DIR)/test_matter_unit $(LDFLAGS)
+	./$(BUILD_DIR)/test_matter_unit
+
+# Matter integration tests (grid simulation without engine)
+test-matter-integration: $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/test_matter_integration.c -o $(BUILD_DIR)/test_matter_integration $(LDFLAGS)
+	./$(BUILD_DIR)/test_matter_integration
+
+# Matter system tests (full engine with designed maps)
+# Requires linking with actual matter.c and dependencies
+MATTER_TEST_DEPS = $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c
+test-matter-system: $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/test_matter_system.c $(MATTER_TEST_DEPS) -o $(BUILD_DIR)/test_matter_system $(LDFLAGS)
+	./$(BUILD_DIR)/test_matter_system
+
+# Run all matter tests in order
+test-matter: test-matter-unit test-matter-integration test-matter-system
+	@echo ""
+	@echo "All matter tests passed!"
+
 # Clean (removes build dir with all .o and .d files)
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(TUNE_TARGET)
@@ -136,4 +161,4 @@ tune-dry-run: $(TUNE_TARGET)
 tune-clean:
 	rm -rf terrain_output $(TUNE_TARGET)
 
-.PHONY: all run debug clean rebuild test test-growth tune-terrain tune-init tune-single tune-dry-run tune-clean
+.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system tune-terrain tune-init tune-single tune-dry-run tune-clean

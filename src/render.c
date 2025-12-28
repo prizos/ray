@@ -1,4 +1,5 @@
 #include "render.h"
+#include "matter.h"
 #include "raymath.h"
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,10 @@ typedef enum {
     GROUP_BEAVER_EYE,
     GROUP_WATER_SHALLOW,
     GROUP_WATER_DEEP,
+    // Matter-based (physics-based substances)
+    GROUP_CELLULOSE,        // Green vegetation (all biomass)
+    GROUP_BURNING_MATTER,   // Orange/red fire
+    GROUP_ASH,              // Gray residue
     GROUP_COUNT
 } ColorGroup;
 
@@ -132,7 +137,11 @@ void render_init(void)
         BEAVER_TEETH_COLOR,
         BEAVER_EYE_COLOR,
         { 80, 170, 220, 160 },  // Water shallow (lighter blue, semi-transparent)
-        { 30, 100, 180, 200 }   // Water deep (darker blue, more opaque)
+        { 30, 100, 180, 200 },  // Water deep (darker blue, more opaque)
+        // Matter-based (physics substances)
+        { 86, 141, 58, 255 },   // Cellulose (green vegetation)
+        { 255, 120, 30, 255 },  // Burning matter (orange-red)
+        { 80, 80, 80, 255 }     // Ash (dark gray)
     };
 
     for (int i = 0; i < GROUP_COUNT; i++) {
@@ -212,11 +221,9 @@ static inline void add_instance_rotated(ColorGroup group, float x, float y, floa
 }
 
 static ColorGroup get_terrain_group(const GameState *state, int x, int z) {
-    TerrainBurnState burn = state->terrain_burn[x][z];
     int height = state->terrain_height[x][z];
 
-    if (burn == TERRAIN_BURNING) return GROUP_TERRAIN_FIRE;
-    if (burn == TERRAIN_BURNED) return GROUP_TERRAIN_BURNED;
+    // Terrain base color by height only (fire now comes from matter system)
     if (height >= 8) return GROUP_TERRAIN_ROCK;
     if (height >= 5) return GROUP_TERRAIN_HIGH;
     if (height < WATER_LEVEL) return GROUP_TERRAIN_UNDERWATER;
@@ -442,6 +449,47 @@ void render_frame(const GameState *state)
         }
     }
 
+    // ========== COLLECT MATTER VEGETATION INSTANCES ==========
+    // Now uses physics-based substances (SUBST_CELLULOSE, SUBST_ASH, etc.)
+    if (state->matter.initialized) {
+        const float MIN_DENSITY = 0.05f;  // Minimum density to render
+        const float VEG_HEIGHT_BASE = 0.3f;  // Base vegetation height
+        const float VEG_HEIGHT_SCALE = 2.0f; // Height multiplier based on density
+
+        for (int x = 0; x < MATTER_RES; x++) {
+            for (int z = 0; z < MATTER_RES; z++) {
+                const MatterCell *cell = &state->matter.cells[x][z];
+
+                // World position
+                float world_x = x * MATTER_CELL_SIZE;
+                float world_z = z * MATTER_CELL_SIZE;
+                float terrain_top = (cell->terrain_height * TERRAIN_SCALE) + (TERRAIN_SCALE / 2.0f);
+
+                // Check if cell is burning (cellulose + O2 + high temp)
+                bool is_burning = cell_can_combust(cell, SUBST_CELLULOSE);
+
+                // Render cellulose (vegetation/biomass)
+                float cellulose = FIXED_TO_FLOAT(cell->mass[SUBST_CELLULOSE]);
+                if (cellulose > MIN_DENSITY) {
+                    float height = VEG_HEIGHT_BASE + cellulose * VEG_HEIGHT_SCALE;
+                    float y = terrain_top + height / 2.0f;
+                    ColorGroup grp = is_burning ? GROUP_BURNING_MATTER : GROUP_CELLULOSE;
+                    add_instance_scaled(grp, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.8f, height, MATTER_CELL_SIZE * 0.8f);
+                }
+
+                // Render ash
+                float ash = FIXED_TO_FLOAT(cell->mass[SUBST_ASH]);
+                if (ash > MIN_DENSITY) {
+                    float height = 0.05f + ash * 0.15f;
+                    float y = terrain_top + height / 2.0f;
+                    add_instance_scaled(GROUP_ASH, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.5f, height, MATTER_CELL_SIZE * 0.5f);
+                }
+            }
+        }
+    }
+
     // ========== DRAW ==========
     BeginDrawing();
     ClearBackground(SKY_COLOR);
@@ -519,8 +567,8 @@ void render_frame(const GameState *state)
 
     const char *tool_name = "TREE";
     Color tool_color = GREEN;
-    if (state->current_tool == TOOL_BURN) {
-        tool_name = "BURN";
+    if (state->current_tool == TOOL_HEAT) {
+        tool_name = "HEAT";
         tool_color = ORANGE;
     } else if (state->current_tool == TOOL_WATER) {
         tool_name = "WATER";
@@ -528,7 +576,7 @@ void render_frame(const GameState *state)
     }
     DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
 
-    DrawText("1 - Burn, 2 - Tree, 3 - Water", 20, 42, 12, LIGHTGRAY);
+    DrawText("1 - Heat, 2 - Tree, 3 - Water", 20, 42, 12, LIGHTGRAY);
     DrawText("Left-click - Use tool", 20, 57, 12, LIGHTGRAY);
     DrawText("Right-click + drag - Look around", 20, 72, 12, LIGHTGRAY);
     DrawText("WASD - Move, Q/E - Down/Up, Shift - Sprint", 20, 87, 12, LIGHTGRAY);

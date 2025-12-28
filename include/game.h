@@ -6,6 +6,7 @@
 #include "terrain.h"
 #include "beaver.h"
 #include "water.h"
+#include "matter.h"
 #include <stdint.h>
 
 // ============ DISPLAY CONSTANTS ============
@@ -29,7 +30,7 @@
 
 typedef enum {
     TOOL_TREE,
-    TOOL_BURN,
+    TOOL_HEAT,   // Adds heat to matter cells (fire tool)
     TOOL_WATER
 } ToolType;
 
@@ -54,11 +55,12 @@ typedef struct GameState {
 
     // Terrain
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
-    TerrainBurnState terrain_burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
-    float terrain_burn_timer[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
 
     // Water simulation
     WaterState water;
+
+    // Matter simulation (thermodynamic vegetation, fire, nutrients)
+    MatterState matter;
 
     // Trees (dynamically allocated, grows as needed)
     Tree *trees;
@@ -71,8 +73,6 @@ typedef struct GameState {
 
     // Timers
     float growth_timer;
-    float burn_timer;
-    float regen_timer;
 
     bool paused;
 } GameState;
