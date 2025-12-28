@@ -25,8 +25,8 @@ BUILD_DIR = build
 INCLUDE_DIR = include
 TEST_DIR = tests
 
-# Files
-SRCS = $(wildcard $(SRC_DIR)/*.c)
+# Files (exclude test files from main build)
+SRCS = $(filter-out $(SRC_DIR)/test_%.c,$(wildcard $(SRC_DIR)/*.c))
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 TARGET = game
 
@@ -58,7 +58,7 @@ debug: CFLAGS += -g -DDEBUG
 debug: clean all
 
 # Test targets
-test: $(BUILD_DIR) $(TEST_TARGETS)
+test: $(BUILD_DIR) $(TEST_TARGETS) test-growth
 	@echo "Running tests..."
 	@for test in $(TEST_TARGETS); do \
 		echo ""; \
@@ -71,6 +71,11 @@ test: $(BUILD_DIR) $(TEST_TARGETS)
 $(BUILD_DIR)/test_%: $(TEST_DIR)/test_%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
+# Growth distribution test (no raylib graphics needed)
+test-growth: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DTEST_BUILD $(SRC_DIR)/test_growth.c -o $(BUILD_DIR)/test_growth -lm
+	./$(BUILD_DIR)/test_growth
+
 # Clean
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
@@ -78,4 +83,4 @@ clean:
 # Rebuild
 rebuild: clean all
 
-.PHONY: all run debug clean rebuild test
+.PHONY: all run debug clean rebuild test test-growth

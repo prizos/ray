@@ -6,100 +6,129 @@
 #define SCREEN_WIDTH 1280
 #define SCREEN_HEIGHT 720
 
-// Physics constants
-#define GRAVITY 9.8f
-#define THRUST_POWER 20.0f
-#define HORIZONTAL_SPEED 8.0f
-#define MAX_FALL_SPEED 30.0f
-#define GROUND_LEVEL 0.5f
-#define PLAYER_RADIUS 0.3f
+// Grid settings
+#define GRID_WIDTH 40
+#define GRID_HEIGHT 40
+#define CELL_SIZE 5.0f
+#define BOX_SIZE 0.4f
 
-// Fuel constants
-#define MAX_FUEL 100.0f
-#define STARTING_FUEL 60.0f
-#define FUEL_CONSUMPTION_RATE 15.0f  // Fuel units per second when thrusting
-#define FUEL_GAIN_PER_LETTER 25.0f   // Fuel gained per safe letter
-#define FUEL_COST_PER_LETTER 15.0f   // Fuel lost per dangerous letter
-#define DANGEROUS_LETTER_CHANCE 40   // Percent chance a letter is dangerous
+// Terrain settings
+#define TERRAIN_RESOLUTION 80   // Terrain grid points
+#define TERRAIN_SCALE 2.5f      // Size of each terrain voxel
+#define WATER_LEVEL 3           // Height below which water appears
 
-// Letter entity settings
-#define MAX_LETTERS 10
-#define LETTER_SPEED_MIN 3.0f
-#define LETTER_SPEED_MAX 8.0f
-#define LETTER_SIZE 2.0f
-#define LETTER_COLLISION_RADIUS 1.5f
+// Tree settings
+#define MAX_TREES 12
+#define MAX_TREE_HEIGHT 120
+#define MAX_VOXELS_PER_TREE 12000
+#define MAX_TIPS_PER_TREE 200
+#define MAX_ATTRACTORS 800
 
-// Spawn bounds (letters spawn on the left, move right)
-#define SPAWN_X_MIN -30.0f
-#define SPAWN_X_MAX -25.0f
-#define SPAWN_Y_MIN 1.5f
-#define SPAWN_Y_MAX 8.0f
-#define SPAWN_Z_MIN -10.0f
-#define SPAWN_Z_MAX 10.0f
-#define DESPAWN_X 30.0f
+// Spatial hash settings (prime number > MAX_VOXELS_PER_TREE * 1.3)
+#define VOXEL_HASH_SIZE 16007
 
-// Available letters to spawn
-#define LETTER_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+#define GROWTH_INTERVAL 0.05f  // Very fast growth
 
-// Adversary settings
-#define ADVERSARY_SPEED 3.0f
-#define ADVERSARY_RADIUS 1.8f
-#define ADVERSARY_SCORE_PENALTY 5
+// Tree algorithm types
+typedef enum {
+    TREE_LSYSTEM,
+    TREE_SPACE_COLONIZATION,
+    TREE_AGENT_TIPS
+} TreeAlgorithm;
 
-// Player state
-typedef struct Player {
-    Vector3 position;
-    Vector3 velocity;
-    float yaw;           // Horizontal look angle
-    float pitch;         // Vertical look angle
-    float fuel;          // Current fuel level
-    bool is_thrusting;
-    bool is_grounded;
-} Player;
+// Voxel types for coloring
+typedef enum {
+    VOXEL_TRUNK,
+    VOXEL_BRANCH,
+    VOXEL_LEAF
+} VoxelType;
 
-// Letter entity
-typedef struct Letter {
-    Vector3 position;
-    Vector3 velocity;
-    char character;
+// A single voxel in a tree
+typedef struct {
+    int x, y, z;       // Position relative to tree base
+    VoxelType type;    // Trunk, branch, or leaf
     bool active;
-    bool was_hit;
-    bool is_dangerous;  // true = costs fuel (red), false = gives fuel (green)
-    Color color;
-} Letter;
+} TreeVoxel;
 
-// Adversary (chasing red X)
-typedef struct Adversary {
-    Vector3 position;
+// Growth tip for agent-based trees
+typedef struct {
+    float x, y, z;      // Current position
+    float dx, dy, dz;   // Direction
+    float energy;       // Remaining growth energy
+    int generation;     // How many times this tip has branched
     bool active;
-    float hit_cooldown;  // Prevents rapid repeated hits
-} Adversary;
+} GrowthTip;
+
+// Attraction point for space colonization
+typedef struct {
+    float x, y, z;
+    bool active;
+} Attractor;
+
+// Spatial hash entry (packed position -> voxel index)
+typedef struct {
+    int key;        // Packed (x,y,z) or -1 if empty
+    int voxel_idx;  // Index into voxels array
+} VoxelHashEntry;
+
+// Tree structure
+typedef struct {
+    int base_x, base_y, base_z;  // Grid position (base_y = terrain height)
+    TreeAlgorithm algorithm;
+    bool active;
+
+    // Voxel storage
+    TreeVoxel voxels[MAX_VOXELS_PER_TREE];
+    int voxel_count;
+
+    // Spatial hash for O(1) duplicate checking
+    VoxelHashEntry voxel_hash[VOXEL_HASH_SIZE];
+
+    // Cached voxel counts (updated incrementally)
+    int trunk_count;
+    int branch_count_cached;
+    int leaf_count;
+
+    // L-System state
+    int lsystem_iteration;
+
+    // Space Colonization state
+    Attractor attractors[MAX_ATTRACTORS];
+    int attractor_count;
+    GrowthTip branches[MAX_TIPS_PER_TREE];
+    int branch_count;
+
+    // Agent-based state
+    GrowthTip tips[MAX_TIPS_PER_TREE];
+    int tip_count;
+} Tree;
 
 // Game state structure
 typedef struct GameState {
-    Player player;
     Camera3D camera;
+    float camera_yaw;      // Horizontal angle (radians)
+    float camera_pitch;    // Vertical angle (radians)
     bool running;
-    int score;
-    Letter letters[MAX_LETTERS];
-    float spawn_timer;
-    float spawn_interval;
-    Adversary adversary;
+
+    // Terrain height map
+    int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
+
+    // Trees
+    Tree trees[MAX_TREES];
+    int tree_count;
+
+    // Growth timing
+    float growth_timer;
+    bool paused;
 } GameState;
 
 // Initialize game state
 void game_init(GameState *state);
 
-// Update game state (called each frame)
+// Update game state
 void game_update(GameState *state);
 
-// Cleanup game resources
+// Cleanup
 void game_cleanup(GameState *state);
-
-// Spawn a new letter
-void game_spawn_letter(GameState *state);
-
-// Check collision between player and a letter
-bool game_check_letter_collision(Vector3 player_pos, Letter *letter);
 
 #endif // GAME_H

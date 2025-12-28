@@ -1,249 +1,767 @@
 #include "game.h"
-#include "input.h"
-#include "audio.h"
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
+#include <stdlib.h>
 
-// Random float between min and max
-static float random_float(float min, float max)
-{
-    return min + (float)GetRandomValue(0, 10000) / 10000.0f * (max - min);
+// Camera movement speed
+#define MOVE_SPEED 50.0f
+#define LOOK_SPEED 2.0f
+
+// ============ HELPER FUNCTIONS ============
+
+static float randf(void) {
+    return (float)GetRandomValue(0, 10000) / 10000.0f;
 }
 
-static void reset_player(Player *player)
-{
-    player->position = (Vector3){ 0.0f, 5.0f, 15.0f };
-    player->velocity = (Vector3){ 0.0f, 0.0f, 0.0f };
-    player->yaw = 0.0f;
-    player->pitch = 0.0f;
-    player->fuel = STARTING_FUEL;
-    player->is_thrusting = false;
-    player->is_grounded = false;
+static float randf_range(float min, float max) {
+    return min + randf() * (max - min);
 }
 
-void game_spawn_letter(GameState *state)
-{
-    // Find an inactive letter slot
-    for (int i = 0; i < MAX_LETTERS; i++) {
-        if (!state->letters[i].active) {
-            Letter *letter = &state->letters[i];
+// Pack (x,y,z) into a single int for hashing
+// x,z range: roughly -50 to 50, y range: 0 to 120
+// Offset to make positive: x+100, z+100, y stays positive
+static inline int voxel_pack_key(int x, int y, int z) {
+    return ((x + 100) << 16) | ((z + 100) << 8) | y;
+}
 
-            // Random position on the left side
-            letter->position.x = random_float(SPAWN_X_MIN, SPAWN_X_MAX);
-            letter->position.y = random_float(SPAWN_Y_MIN, SPAWN_Y_MAX);
-            letter->position.z = random_float(SPAWN_Z_MIN, SPAWN_Z_MAX);
+// Hash function for spatial hash
+static inline int voxel_hash(int key) {
+    // Simple hash with good distribution
+    unsigned int h = (unsigned int)key;
+    h = ((h >> 16) ^ h) * 0x45d9f3b;
+    h = ((h >> 16) ^ h) * 0x45d9f3b;
+    h = (h >> 16) ^ h;
+    return (int)(h % VOXEL_HASH_SIZE);
+}
 
-            // Velocity moving right (positive X)
-            float speed = random_float(LETTER_SPEED_MIN, LETTER_SPEED_MAX);
-            letter->velocity = (Vector3){ speed, 0.0f, 0.0f };
+// Check if voxel exists in hash (O(1) average)
+static bool voxel_exists(Tree *tree, int x, int y, int z) {
+    int key = voxel_pack_key(x, y, z);
+    int idx = voxel_hash(key);
 
-            // Random character
-            const char *chars = LETTER_CHARS;
-            int len = (int)strlen(chars);
-            letter->character = chars[GetRandomValue(0, len - 1)];
+    // Linear probing
+    for (int i = 0; i < VOXEL_HASH_SIZE; i++) {
+        int probe = (idx + i) % VOXEL_HASH_SIZE;
+        if (tree->voxel_hash[probe].key == -1) {
+            return false;  // Empty slot, not found
+        }
+        if (tree->voxel_hash[probe].key == key) {
+            return true;   // Found
+        }
+    }
+    return false;
+}
 
-            // Determine if dangerous or safe
-            letter->is_dangerous = (GetRandomValue(0, 99) < DANGEROUS_LETTER_CHANCE);
+// Add voxel to hash table
+static void voxel_hash_insert(Tree *tree, int x, int y, int z, int voxel_idx) {
+    int key = voxel_pack_key(x, y, z);
+    int idx = voxel_hash(key);
 
-            // Color based on type: red = dangerous, green = safe
-            if (letter->is_dangerous) {
-                letter->color = RED;
-            } else {
-                letter->color = GREEN;
-            }
-
-            letter->active = true;
-            letter->was_hit = false;
-
-            break;
+    // Linear probing to find empty slot
+    for (int i = 0; i < VOXEL_HASH_SIZE; i++) {
+        int probe = (idx + i) % VOXEL_HASH_SIZE;
+        if (tree->voxel_hash[probe].key == -1) {
+            tree->voxel_hash[probe].key = key;
+            tree->voxel_hash[probe].voxel_idx = voxel_idx;
+            return;
         }
     }
 }
 
-bool game_check_letter_collision(Vector3 player_pos, Letter *letter)
-{
-    if (!letter->active || letter->was_hit) return false;
-
-    // Simple sphere collision
-    float dx = player_pos.x - letter->position.x;
-    float dy = player_pos.y - letter->position.y;
-    float dz = player_pos.z - letter->position.z;
-    float dist_sq = dx * dx + dy * dy + dz * dz;
-
-    float combined_radius = LETTER_COLLISION_RADIUS + PLAYER_RADIUS;
-    return dist_sq < (combined_radius * combined_radius);
+// Initialize hash table (call when creating/resetting tree)
+static void voxel_hash_clear(Tree *tree) {
+    for (int i = 0; i < VOXEL_HASH_SIZE; i++) {
+        tree->voxel_hash[i].key = -1;
+    }
+    tree->trunk_count = 0;
+    tree->branch_count_cached = 0;
+    tree->leaf_count = 0;
 }
+
+// Add a voxel to a tree (returns false if full or duplicate)
+// O(1) average time complexity
+static bool tree_add_voxel(Tree *tree, int x, int y, int z, VoxelType type) {
+    if (tree->voxel_count >= MAX_VOXELS_PER_TREE) return false;
+    if (y > MAX_TREE_HEIGHT || y < 0) return false;
+
+    // O(1) duplicate check using spatial hash
+    if (voxel_exists(tree, x, y, z)) {
+        return false;
+    }
+
+    // Add to voxel array
+    int idx = tree->voxel_count;
+    tree->voxels[idx].x = x;
+    tree->voxels[idx].y = y;
+    tree->voxels[idx].z = z;
+    tree->voxels[idx].type = type;
+    tree->voxels[idx].active = true;
+    tree->voxel_count++;
+
+    // Add to hash table
+    voxel_hash_insert(tree, x, y, z, idx);
+
+    // Update cached counts
+    switch (type) {
+        case VOXEL_TRUNK: tree->trunk_count++; break;
+        case VOXEL_BRANCH: tree->branch_count_cached++; break;
+        case VOXEL_LEAF: tree->leaf_count++; break;
+    }
+
+    return true;
+}
+
+// ============ L-SYSTEM GROWTH ============
+
+static void grow_lsystem(Tree *tree) {
+    if (tree->lsystem_iteration >= 25) return;  // More iterations
+
+    tree->lsystem_iteration++;
+
+    // Find the highest points
+    int max_y = 0;
+    for (int i = 0; i < tree->voxel_count; i++) {
+        if (tree->voxels[i].active && tree->voxels[i].y > max_y) {
+            max_y = tree->voxels[i].y;
+        }
+    }
+
+    // Grow from top voxels
+    int initial_count = tree->voxel_count;
+    for (int i = 0; i < initial_count; i++) {
+        TreeVoxel *v = &tree->voxels[i];
+        if (!v->active || v->y < max_y - 2) continue;
+
+        // Main trunk grows up (thicker at base)
+        if (v->x == 0 && v->z == 0 && v->y < 20) {
+            tree_add_voxel(tree, 0, v->y + 1, 0, VOXEL_TRUNK);
+            // Thicker trunk base
+            if (v->y < 5) {
+                tree_add_voxel(tree, 1, v->y, 0, VOXEL_TRUNK);
+                tree_add_voxel(tree, -1, v->y, 0, VOXEL_TRUNK);
+                tree_add_voxel(tree, 0, v->y, 1, VOXEL_TRUNK);
+                tree_add_voxel(tree, 0, v->y, -1, VOXEL_TRUNK);
+            }
+        }
+
+        // Branch probability increases with height
+        float branch_chance = 0.15f + (float)v->y * 0.02f;
+        if (randf() < branch_chance && v->y > 5) {
+            int dx = GetRandomValue(-1, 1);
+            int dz = GetRandomValue(-1, 1);
+            if (dx != 0 || dz != 0) {
+                // Branch extends outward
+                for (int len = 1; len <= GetRandomValue(2, 5); len++) {
+                    int bx = v->x + dx * len;
+                    int bz = v->z + dz * len;
+                    int by = v->y + len / 2;
+                    tree_add_voxel(tree, bx, by, bz, VOXEL_BRANCH);
+
+                    // Add leaves at branch ends
+                    if (len >= 2 && randf() < 0.6f) {
+                        tree_add_voxel(tree, bx, by + 1, bz, VOXEL_LEAF);
+                        tree_add_voxel(tree, bx + 1, by, bz, VOXEL_LEAF);
+                        tree_add_voxel(tree, bx - 1, by, bz, VOXEL_LEAF);
+                        tree_add_voxel(tree, bx, by, bz + 1, VOXEL_LEAF);
+                        tree_add_voxel(tree, bx, by, bz - 1, VOXEL_LEAF);
+                    }
+                }
+            }
+        }
+
+        // Add leaves at top
+        if (v->y > 15 && randf() < 0.3f) {
+            tree_add_voxel(tree, v->x, v->y + 1, v->z, VOXEL_LEAF);
+        }
+    }
+}
+
+// ============ SPACE COLONIZATION ============
+
+static void init_space_colonization(Tree *tree) {
+    // Oak-style: wide spreading crown, shorter trunk
+    tree->attractor_count = 0;
+
+    // Central column attractors - shorter trunk for oak
+    for (int i = 0; i < 60; i++) {
+        float height = randf_range(15, 45);  // Shorter trunk
+        float radius = randf_range(0, 2);
+        float angle = randf() * 2.0f * PI;
+        tree->attractors[tree->attractor_count].x = cosf(angle) * radius;
+        tree->attractors[tree->attractor_count].y = height;
+        tree->attractors[tree->attractor_count].z = sinf(angle) * radius;
+        tree->attractors[tree->attractor_count].active = true;
+        tree->attractor_count++;
+    }
+
+    // Oak crown - wide spreading, not too tall
+    for (int i = 0; i < MAX_ATTRACTORS - 60; i++) {
+        float height = randf_range(25, 55);  // Lower, flatter crown
+        // Oak: very wide spread, relatively flat top
+        float min_radius = 6.0f + (height - 25) * 0.3f;
+        float max_radius = 15.0f + (height - 25) * 0.8f;
+        if (max_radius > 30) max_radius = 30;  // Cap max spread
+        float radius = randf_range(min_radius, max_radius);
+        float angle = randf() * 2.0f * PI;
+
+        tree->attractors[tree->attractor_count].x = cosf(angle) * radius;
+        tree->attractors[tree->attractor_count].y = height;
+        tree->attractors[tree->attractor_count].z = sinf(angle) * radius;
+        tree->attractors[tree->attractor_count].active = true;
+        tree->attractor_count++;
+    }
+
+    // Pre-spawn 4-6 main branches at different heights (oak style)
+    tree->branch_count = 0;
+    int num_main_branches = 4 + (rand() % 3);
+    for (int i = 0; i < num_main_branches; i++) {
+        if (tree->branch_count >= MAX_TIPS_PER_TREE) break;
+        GrowthTip *branch = &tree->branches[tree->branch_count++];
+        float angle = (2.0f * PI * i / num_main_branches) + randf_range(-0.3f, 0.3f);
+        float height = 15.0f + i * 5.0f + randf_range(-2, 2);
+
+        branch->x = cosf(angle) * 2.0f;  // Start slightly away from trunk
+        branch->y = height;
+        branch->z = sinf(angle) * 2.0f;
+        branch->dx = cosf(angle) * 1.0f;
+        branch->dy = randf_range(-0.1f, 0.15f);
+        branch->dz = sinf(angle) * 1.0f;
+        branch->generation = 1;
+        branch->energy = randf_range(18, 28);  // Long main branches
+        branch->active = true;
+    }
+
+    // Build thick trunk up to where branches start
+    for (int y = 0; y < 40; y++) {
+        int trunk_radius;
+        if (y < 4) trunk_radius = 3;
+        else if (y < 10) trunk_radius = 2;
+        else if (y < 20) trunk_radius = 1;
+        else trunk_radius = 0;
+
+        for (int tx = -trunk_radius; tx <= trunk_radius; tx++) {
+            for (int tz = -trunk_radius; tz <= trunk_radius; tz++) {
+                if (tx*tx + tz*tz <= trunk_radius*trunk_radius + 1) {
+                    tree_add_voxel(tree, tx, y, tz, VOXEL_TRUNK);
+                }
+            }
+        }
+    }
+}
+
+static void grow_space_colonization(Tree *tree) {
+    float influence_radius = 15.0f;
+    float kill_radius = 3.0f;
+
+    for (int b = 0; b < tree->branch_count; b++) {
+        GrowthTip *tip = &tree->branches[b];
+        if (!tip->active) continue;
+
+        // Branches die when out of energy
+        if (tip->generation > 0 && tip->energy <= 0) {
+            // Add leaf cluster at end
+            for (int lx = -1; lx <= 1; lx++) {
+                for (int lz = -1; lz <= 1; lz++) {
+                    tree_add_voxel(tree, (int)tip->x + lx, (int)tip->y, (int)tip->z + lz, VOXEL_LEAF);
+                    tree_add_voxel(tree, (int)tip->x + lx, (int)tip->y + 1, (int)tip->z + lz, VOXEL_LEAF);
+                }
+            }
+            tip->active = false;
+            continue;
+        }
+
+        // Find the CLOSEST attractor to this tip
+        float closest_dist = 9999.0f;
+        int closest_idx = -1;
+        float closest_dx = 0, closest_dy = 0, closest_dz = 0;
+
+        for (int a = 0; a < tree->attractor_count; a++) {
+            Attractor *attr = &tree->attractors[a];
+            if (!attr->active) continue;
+
+            float dx = attr->x - tip->x;
+            float dy = attr->y - tip->y;
+            float dz = attr->z - tip->z;
+            float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+
+            if (dist < kill_radius) {
+                attr->active = false;
+                // Add leaves only on branches (generation > 0), not trunk
+                if (tip->generation > 0) {
+                    tree_add_voxel(tree, (int)tip->x, (int)tip->y + 1, (int)tip->z, VOXEL_LEAF);
+                    if (randf() < 0.5f) {
+                        tree_add_voxel(tree, (int)tip->x + 1, (int)tip->y, (int)tip->z, VOXEL_LEAF);
+                        tree_add_voxel(tree, (int)tip->x - 1, (int)tip->y, (int)tip->z, VOXEL_LEAF);
+                        tree_add_voxel(tree, (int)tip->x, (int)tip->y, (int)tip->z + 1, VOXEL_LEAF);
+                        tree_add_voxel(tree, (int)tip->x, (int)tip->y, (int)tip->z - 1, VOXEL_LEAF);
+                    }
+                }
+            } else if (dist < influence_radius && dist < closest_dist) {
+                closest_dist = dist;
+                closest_idx = a;
+                closest_dx = dx;
+                closest_dy = dy;
+                closest_dz = dz;
+            }
+        }
+
+        if (closest_idx >= 0) {
+            float len = sqrtf(closest_dx*closest_dx + closest_dy*closest_dy + closest_dz*closest_dz);
+            if (len > 0) {
+                float dist_from_center = sqrtf(tip->x*tip->x + tip->z*tip->z);
+                bool is_trunk = (dist_from_center < 2.0f && tip->generation == 0);
+                bool is_branch = (tip->generation > 0);
+
+                // Store previous position for interpolation
+                float prev_x = tip->x;
+                float prev_y = tip->y;
+                float prev_z = tip->z;
+
+                // Movement direction
+                float step_size = is_trunk ? 0.6f : 0.8f;
+                float move_dx, move_dy, move_dz;
+                if (is_trunk) {
+                    // Trunk grows mostly upward toward attractors
+                    move_dx = (closest_dx / len) * 0.3f * step_size;
+                    move_dy = (closest_dy / len) * 1.0f * step_size;
+                    move_dz = (closest_dz / len) * 0.3f * step_size;
+                } else {
+                    // Branches: mostly follow their own direction (momentum)
+                    // Only slightly influenced by attractors for straighter growth
+                    float old_len = sqrtf(tip->dx*tip->dx + tip->dy*tip->dy + tip->dz*tip->dz);
+                    if (old_len > 0.01f) {
+                        // 80% own direction, 20% toward attractor
+                        float momentum = 0.8f;
+                        move_dx = (tip->dx / old_len * momentum + closest_dx / len * (1-momentum)) * step_size;
+                        move_dy = (tip->dy / old_len * momentum + closest_dy / len * 0.1f) * step_size; // Very little vertical
+                        move_dz = (tip->dz / old_len * momentum + closest_dz / len * (1-momentum)) * step_size;
+                    } else {
+                        move_dx = (closest_dx / len) * step_size;
+                        move_dy = 0.05f * step_size;
+                        move_dz = (closest_dz / len) * step_size;
+                    }
+                    // Consume energy
+                    tip->energy -= 1.0f;
+                }
+
+                tip->x += move_dx;
+                tip->y += move_dy;
+                tip->z += move_dz;
+
+                // Determine voxel type
+                VoxelType type = is_trunk ? VOXEL_TRUNK : VOXEL_BRANCH;
+
+                // Interpolate between previous and current position for contiguous branches
+                float dx = tip->x - prev_x;
+                float dy = tip->y - prev_y;
+                float dz = tip->z - prev_z;
+                float move_len = sqrtf(dx*dx + dy*dy + dz*dz);
+                int steps = (int)(move_len / 0.4f) + 1;
+
+                for (int s = 0; s <= steps; s++) {
+                    float t = (float)s / (float)steps;
+                    int vx = (int)(prev_x + dx * t);
+                    int vy = (int)(prev_y + dy * t);
+                    int vz = (int)(prev_z + dz * t);
+
+                    tree_add_voxel(tree, vx, vy, vz, type);
+
+                    // Thicker trunk/main branches
+                    if (is_trunk || dist_from_center < 5) {
+                        tree_add_voxel(tree, vx + 1, vy, vz, type);
+                        tree_add_voxel(tree, vx - 1, vy, vz, type);
+                        tree_add_voxel(tree, vx, vy, vz + 1, type);
+                        tree_add_voxel(tree, vx, vy, vz - 1, type);
+                    }
+                }
+
+                // Add leaves only on branches, further from trunk for oak-style
+                if (is_branch && dist_from_center > 10 && randf() < 0.5f) {
+                    // Larger leaf clusters on oak
+                    tree_add_voxel(tree, (int)tip->x, (int)tip->y + 1, (int)tip->z, VOXEL_LEAF);
+                    tree_add_voxel(tree, (int)tip->x + 1, (int)tip->y, (int)tip->z, VOXEL_LEAF);
+                    tree_add_voxel(tree, (int)tip->x - 1, (int)tip->y, (int)tip->z, VOXEL_LEAF);
+                    tree_add_voxel(tree, (int)tip->x, (int)tip->y, (int)tip->z + 1, VOXEL_LEAF);
+                    tree_add_voxel(tree, (int)tip->x, (int)tip->y, (int)tip->z - 1, VOXEL_LEAF);
+                }
+
+                // Update tip direction for next iteration
+                tip->dx = move_dx;
+                tip->dy = move_dy;
+                tip->dz = move_dz;
+
+                // Branch spawning logic
+                bool can_branch = false;
+
+                if (is_trunk && tip->y > 12) {
+                    // Trunk spawns multiple main branches at intervals
+                    can_branch = (randf() < 0.25f);  // Regular branching from trunk
+                } else if (is_branch) {
+                    // Branches can sub-branch, more likely further out
+                    float sub_chance = 0.12f + (dist_from_center * 0.01f);
+                    can_branch = (randf() < sub_chance);
+                }
+
+                if (can_branch && tree->branch_count < MAX_TIPS_PER_TREE) {
+                    GrowthTip *new_tip = &tree->branches[tree->branch_count++];
+                    new_tip->x = tip->x;
+                    new_tip->y = tip->y;
+                    new_tip->z = tip->z;
+
+                    // Oak-style: branches go strongly outward
+                    float branch_angle = randf() * 2.0f * PI;
+                    new_tip->dx = cosf(branch_angle) * 1.0f;
+                    new_tip->dy = randf_range(-0.1f, 0.1f);  // Horizontal
+                    new_tip->dz = sinf(branch_angle) * 1.0f;
+                    new_tip->generation = tip->generation + 1;
+                    new_tip->active = true;
+                    // Branch length: main branches longer, sub-branches shorter
+                    new_tip->energy = (tip->generation == 0) ? randf_range(15, 25) : randf_range(8, 15);
+                }
+            }
+        } else {
+            // No attractors - add leaf cluster at tip end (only on branches)
+            if (tip->generation > 0) {
+                for (int lx = -1; lx <= 1; lx++) {
+                    for (int lz = -1; lz <= 1; lz++) {
+                        tree_add_voxel(tree, (int)tip->x + lx, (int)tip->y, (int)tip->z + lz, VOXEL_LEAF);
+                        tree_add_voxel(tree, (int)tip->x + lx, (int)tip->y + 1, (int)tip->z + lz, VOXEL_LEAF);
+                    }
+                }
+            }
+            tip->active = false;
+        }
+    }
+}
+
+// ============ AGENT-BASED GROWTH ============
+
+static void init_agent_tips(Tree *tree) {
+    // Build initial trunk
+    for (int y = 0; y < 6; y++) {
+        tree_add_voxel(tree, 0, y, 0, VOXEL_TRUNK);
+        if (y < 3) {
+            tree_add_voxel(tree, 1, y, 0, VOXEL_TRUNK);
+            tree_add_voxel(tree, -1, y, 0, VOXEL_TRUNK);
+            tree_add_voxel(tree, 0, y, 1, VOXEL_TRUNK);
+            tree_add_voxel(tree, 0, y, -1, VOXEL_TRUNK);
+        }
+    }
+
+    // Main growth tip
+    tree->tips[0].x = 0;
+    tree->tips[0].y = 6;
+    tree->tips[0].z = 0;
+    tree->tips[0].dx = 0;
+    tree->tips[0].dy = 1;
+    tree->tips[0].dz = 0;
+    tree->tips[0].energy = 35.0f;  // More energy for taller trees
+    tree->tips[0].generation = 0;
+    tree->tips[0].active = true;
+    tree->tip_count = 1;
+
+    // Add some initial branch tips
+    for (int i = 1; i <= 3; i++) {
+        float angle = (float)i * 2.0f * PI / 3.0f;
+        tree->tips[i].x = 0;
+        tree->tips[i].y = 5;
+        tree->tips[i].z = 0;
+        tree->tips[i].dx = cosf(angle) * 0.7f;
+        tree->tips[i].dy = 0.5f;
+        tree->tips[i].dz = sinf(angle) * 0.7f;
+        tree->tips[i].energy = 20.0f;
+        tree->tips[i].generation = 1;
+        tree->tips[i].active = true;
+        tree->tip_count++;
+    }
+}
+
+static void grow_agent_tips(Tree *tree) {
+    for (int i = 0; i < tree->tip_count; i++) {
+        GrowthTip *tip = &tree->tips[i];
+        if (!tip->active || tip->energy <= 0) {
+            // Dead tip - add leaf cluster
+            if (tip->active && tip->y > 8) {
+                for (int lx = -1; lx <= 1; lx++) {
+                    for (int lz = -1; lz <= 1; lz++) {
+                        tree_add_voxel(tree, (int)tip->x + lx, (int)tip->y, (int)tip->z + lz, VOXEL_LEAF);
+                    }
+                }
+            }
+            tip->active = false;
+            continue;
+        }
+
+        // Random wobble
+        tip->dx += randf_range(-0.2f, 0.2f);
+        tip->dz += randf_range(-0.2f, 0.2f);
+
+        // Upward bias decreases with generation
+        float upward_bias = 0.9f - tip->generation * 0.15f;
+        if (upward_bias < 0.3f) upward_bias = 0.3f;
+        tip->dy = upward_bias + randf_range(-0.1f, 0.1f);
+
+        // Normalize
+        float len = sqrtf(tip->dx*tip->dx + tip->dy*tip->dy + tip->dz*tip->dz);
+        if (len > 0) {
+            tip->dx /= len;
+            tip->dy /= len;
+            tip->dz /= len;
+        }
+
+        // Move
+        tip->x += tip->dx;
+        tip->y += tip->dy;
+        tip->z += tip->dz;
+        tip->energy -= 1.0f;
+
+        // Determine voxel type
+        VoxelType type = VOXEL_BRANCH;
+        if (tip->generation == 0 && fabsf(tip->x) < 2 && fabsf(tip->z) < 2) {
+            type = VOXEL_TRUNK;
+        }
+
+        tree_add_voxel(tree, (int)tip->x, (int)tip->y, (int)tip->z, type);
+
+        // Branching
+        float branch_chance = 0.15f + tip->generation * 0.05f;
+        if (tip->energy > 8 && randf() < branch_chance && tree->tip_count < MAX_TIPS_PER_TREE) {
+            GrowthTip *new_tip = &tree->tips[tree->tip_count++];
+            new_tip->x = tip->x;
+            new_tip->y = tip->y;
+            new_tip->z = tip->z;
+
+            // Branch at angle
+            float angle = randf() * 2.0f * PI;
+            new_tip->dx = cosf(angle) * 0.8f;
+            new_tip->dy = 0.4f;
+            new_tip->dz = sinf(angle) * 0.8f;
+            new_tip->energy = tip->energy * 0.5f;
+            new_tip->generation = tip->generation + 1;
+            new_tip->active = true;
+
+            tip->energy *= 0.75f;
+        }
+
+        // Add occasional leaves along branches
+        if (tip->generation > 0 && tip->y > 10 && randf() < 0.25f) {
+            tree_add_voxel(tree, (int)tip->x, (int)tip->y + 1, (int)tip->z, VOXEL_LEAF);
+        }
+    }
+}
+
+// ============ TREE INITIALIZATION ============
+
+static void init_tree(Tree *tree, int base_x, int base_y, int base_z, TreeAlgorithm algorithm) {
+    tree->base_x = base_x;
+    tree->base_y = base_y;
+    tree->base_z = base_z;
+    tree->algorithm = algorithm;
+    tree->active = true;
+    tree->voxel_count = 0;
+    tree->lsystem_iteration = 0;
+    tree->attractor_count = 0;
+    tree->branch_count = 0;
+    tree->tip_count = 0;
+
+    // Initialize spatial hash (must be before adding any voxels)
+    voxel_hash_clear(tree);
+
+    // Add base voxels
+    tree_add_voxel(tree, 0, 0, 0, VOXEL_TRUNK);
+    tree_add_voxel(tree, 0, 1, 0, VOXEL_TRUNK);
+
+    switch (algorithm) {
+        case TREE_LSYSTEM:
+            break;
+        case TREE_SPACE_COLONIZATION:
+            init_space_colonization(tree);
+            break;
+        case TREE_AGENT_TIPS:
+            init_agent_tips(tree);
+            break;
+    }
+}
+
+// ============ MAIN GAME FUNCTIONS ============
 
 void game_init(GameState *state)
 {
-    // Initialize player
-    reset_player(&state->player);
+    float grid_center_x = (GRID_WIDTH * CELL_SIZE) / 2.0f;
+    float grid_center_z = (GRID_HEIGHT * CELL_SIZE) / 2.0f;
 
-    // Setup camera - must initialize position and target!
-    state->camera.position = state->player.position;
-    state->camera.target = (Vector3){ 0.0f, 3.0f, 0.0f };
+    // Camera starts looking at grid center from an elevated position
+    state->camera.position = (Vector3){ grid_center_x - 80.0f, 60.0f, grid_center_z + 80.0f };
     state->camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
     state->camera.fovy = 60.0f;
     state->camera.projection = CAMERA_PERSPECTIVE;
 
+    // Calculate initial yaw/pitch from position to grid center
+    float dx = grid_center_x - state->camera.position.x;
+    float dy = 30.0f - state->camera.position.y;  // Look slightly below center
+    float dz = grid_center_z - state->camera.position.z;
+    state->camera_yaw = atan2f(dx, dz);
+    state->camera_pitch = atan2f(dy, sqrtf(dx * dx + dz * dz));
+
+    // Set initial target based on angles
+    float cos_pitch = cosf(state->camera_pitch);
+    state->camera.target = (Vector3){
+        state->camera.position.x + sinf(state->camera_yaw) * cos_pitch,
+        state->camera.position.y + sinf(state->camera_pitch),
+        state->camera.position.z + cosf(state->camera_yaw) * cos_pitch
+    };
+
     state->running = true;
-    state->score = 0;
+    state->growth_timer = 0;
+    state->paused = false;
 
-    // Initialize letters as inactive
-    for (int i = 0; i < MAX_LETTERS; i++) {
-        state->letters[i].active = false;
+    // Generate terrain with hills and valleys using layered noise
+    for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
+        for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
+            float fx = (float)x / TERRAIN_RESOLUTION;
+            float fz = (float)z / TERRAIN_RESOLUTION;
+
+            // Layered sine waves for natural-looking terrain
+            float height = 0;
+            height += sinf(fx * 3.0f * PI) * cosf(fz * 2.5f * PI) * 4.0f;
+            height += sinf(fx * 7.0f * PI + 1.0f) * sinf(fz * 6.0f * PI) * 2.0f;
+            height += cosf(fx * 12.0f * PI) * cosf(fz * 11.0f * PI + 0.5f) * 1.0f;
+
+            // Add base height and ensure minimum
+            height += 5.0f;
+            if (height < 0) height = 0;
+
+            state->terrain_height[x][z] = (int)height;
+        }
     }
 
-    // Spawn timing
-    state->spawn_timer = 0.0f;
-    state->spawn_interval = 1.0f;
+    // Initialize trees - all using Space Colonization, spread apart
+    state->tree_count = 0;
+    int spacing = 10;  // More spacing for larger trees
+    for (int x = 5; x < GRID_WIDTH - 5; x += spacing) {
+        for (int z = 5; z < GRID_HEIGHT - 5; z += spacing) {
+            if (state->tree_count >= MAX_TREES) break;
 
-    // Spawn a few letters to start
-    for (int i = 0; i < 3; i++) {
-        game_spawn_letter(state);
+            // Get terrain height at tree position
+            int terrain_x = (int)(x * CELL_SIZE / TERRAIN_SCALE);
+            int terrain_z = (int)(z * CELL_SIZE / TERRAIN_SCALE);
+            if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+            if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+            int ground_height = state->terrain_height[terrain_x][terrain_z];
+
+            // Don't place trees in water
+            if (ground_height < WATER_LEVEL) continue;
+
+            init_tree(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
+            state->tree_count++;
+        }
     }
 
-    // Initialize adversary (starts behind player)
-    state->adversary.position = (Vector3){ 0.0f, 3.0f, 30.0f };
-    state->adversary.active = true;
-    state->adversary.hit_cooldown = 0.0f;
 }
 
 void game_update(GameState *state)
 {
-    float delta_time = GetFrameTime();
-    Player *player = &state->player;
+    float delta = GetFrameTime();
 
-    // Handle reset
-    if (input_reset_requested()) {
-        reset_player(player);
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        state->running = false;
     }
 
-    // Process player input
-    input_update_player(player, delta_time);
-
-    // Apply gravity
-    if (!player->is_grounded) {
-        player->velocity.y -= GRAVITY * delta_time;
-
-        // Clamp fall speed
-        if (player->velocity.y < -MAX_FALL_SPEED) {
-            player->velocity.y = -MAX_FALL_SPEED;
-        }
+    if (IsKeyPressed(KEY_SPACE)) {
+        state->paused = !state->paused;
     }
 
-    // Apply thrust (only if we have fuel)
-    if (player->is_thrusting && player->fuel > 0) {
-        player->velocity.y += THRUST_POWER * delta_time;
-        player->fuel -= FUEL_CONSUMPTION_RATE * delta_time;
-        if (player->fuel < 0) player->fuel = 0;
-    } else if (player->fuel <= 0) {
-        player->is_thrusting = false;  // Can't thrust without fuel
+    if (IsKeyPressed(KEY_R)) {
+        game_init(state);
+        return;
     }
 
-    // Update position
-    player->position.x += player->velocity.x * delta_time;
-    player->position.y += player->velocity.y * delta_time;
-    player->position.z += player->velocity.z * delta_time;
+    // ========== CAMERA CONTROLS ==========
+    // Mouse look: Right-click and drag to look around
+    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+        Vector2 mouse_delta = GetMouseDelta();
+        state->camera_yaw += mouse_delta.x * LOOK_SPEED * 0.003f;
+        state->camera_pitch -= mouse_delta.y * LOOK_SPEED * 0.003f;
 
-    // Ground collision
-    if (player->position.y <= GROUND_LEVEL) {
-        player->position.y = GROUND_LEVEL;
-        player->velocity.y = 0.0f;
-        player->is_grounded = true;
-    } else {
-        player->is_grounded = false;
+        // Clamp pitch to avoid flipping
+        if (state->camera_pitch > 1.4f) state->camera_pitch = 1.4f;
+        if (state->camera_pitch < -1.4f) state->camera_pitch = -1.4f;
     }
 
-    // Update camera to follow player
-    input_update_camera(&state->camera, player);
+    // Calculate forward/right vectors from yaw (horizontal plane movement)
+    float cos_yaw = cosf(state->camera_yaw);
+    float sin_yaw = sinf(state->camera_yaw);
+    Vector3 forward = { sin_yaw, 0, cos_yaw };
+    Vector3 right = { cos_yaw, 0, -sin_yaw };
 
-    // Update spawn timer
-    state->spawn_timer += delta_time;
-    if (state->spawn_timer >= state->spawn_interval) {
-        state->spawn_timer = 0.0f;
-        game_spawn_letter(state);
+    // Movement speed (shift = sprint)
+    float speed = MOVE_SPEED * delta;
+    if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+        speed *= 2.5f;
     }
 
-    // Update letters
-    for (int i = 0; i < MAX_LETTERS; i++) {
-        Letter *letter = &state->letters[i];
-        if (!letter->active) continue;
+    // WASD movement
+    if (IsKeyDown(KEY_W)) {
+        state->camera.position.x += forward.x * speed;
+        state->camera.position.z += forward.z * speed;
+    }
+    if (IsKeyDown(KEY_S)) {
+        state->camera.position.x -= forward.x * speed;
+        state->camera.position.z -= forward.z * speed;
+    }
+    if (IsKeyDown(KEY_A)) {
+        state->camera.position.x -= right.x * speed;
+        state->camera.position.z -= right.z * speed;
+    }
+    if (IsKeyDown(KEY_D)) {
+        state->camera.position.x += right.x * speed;
+        state->camera.position.z += right.z * speed;
+    }
 
-        // Move letter
-        letter->position.x += letter->velocity.x * delta_time;
-        letter->position.y += letter->velocity.y * delta_time;
-        letter->position.z += letter->velocity.z * delta_time;
+    // Vertical movement (Q = down, E = up)
+    if (IsKeyDown(KEY_Q)) state->camera.position.y -= speed;
+    if (IsKeyDown(KEY_E)) state->camera.position.y += speed;
 
-        // Check if letter went off screen (despawn)
-        if (letter->position.x > DESPAWN_X) {
-            letter->active = false;
-            continue;
-        }
+    // Mouse wheel zoom (move forward/backward)
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0) {
+        float cos_pitch = cosf(state->camera_pitch);
+        float zoom_speed = wheel * 10.0f;
+        state->camera.position.x += sin_yaw * cos_pitch * zoom_speed;
+        state->camera.position.y += sinf(state->camera_pitch) * zoom_speed;
+        state->camera.position.z += cos_yaw * cos_pitch * zoom_speed;
+    }
 
-        // Check collision with player
-        if (game_check_letter_collision(player->position, letter)) {
-            letter->was_hit = true;
-            letter->active = false;
+    // Update camera target from yaw/pitch angles
+    float cos_pitch = cosf(state->camera_pitch);
+    state->camera.target = (Vector3){
+        state->camera.position.x + sin_yaw * cos_pitch,
+        state->camera.position.y + sinf(state->camera_pitch),
+        state->camera.position.z + cos_yaw * cos_pitch
+    };
 
-            if (letter->is_dangerous) {
-                // Dangerous letter: costs fuel but still gives score
-                player->fuel -= FUEL_COST_PER_LETTER;
-                if (player->fuel < 0) player->fuel = 0;
-                state->score++;
-            } else {
-                // Safe letter: gives fuel and score
-                player->fuel += FUEL_GAIN_PER_LETTER;
-                if (player->fuel > MAX_FUEL) player->fuel = MAX_FUEL;
-                state->score += 2;  // Bonus for safe letters
-                audio_on_green_hit();  // Trigger hardcore music!
+    // Tree growth
+    if (!state->paused) {
+        state->growth_timer += delta;
+        if (state->growth_timer >= GROWTH_INTERVAL) {
+            state->growth_timer = 0;
+
+            for (int i = 0; i < state->tree_count; i++) {
+                Tree *tree = &state->trees[i];
+                if (!tree->active) continue;
+
+                switch (tree->algorithm) {
+                    case TREE_LSYSTEM:
+                        grow_lsystem(tree);
+                        break;
+                    case TREE_SPACE_COLONIZATION:
+                        grow_space_colonization(tree);
+                        break;
+                    case TREE_AGENT_TIPS:
+                        grow_agent_tips(tree);
+                        break;
+                }
             }
         }
-    }
-
-    // Update adversary (chasing X)
-    if (state->adversary.active) {
-        Adversary *adv = &state->adversary;
-
-        // Update hit cooldown
-        if (adv->hit_cooldown > 0) {
-            adv->hit_cooldown -= delta_time;
-        }
-
-        // Calculate direction to player
-        float dx = player->position.x - adv->position.x;
-        float dy = player->position.y - adv->position.y;
-        float dz = player->position.z - adv->position.z;
-        float dist = sqrtf(dx * dx + dy * dy + dz * dz);
-
-        // Move towards player
-        if (dist > 0.1f) {
-            float speed = ADVERSARY_SPEED * delta_time;
-            adv->position.x += (dx / dist) * speed;
-            adv->position.y += (dy / dist) * speed;
-            adv->position.z += (dz / dist) * speed;
-        }
-
-        // Keep adversary above ground
-        if (adv->position.y < GROUND_LEVEL + 1.0f) {
-            adv->position.y = GROUND_LEVEL + 1.0f;
-        }
-
-        // Check collision with player
-        float combined_radius = ADVERSARY_RADIUS + PLAYER_RADIUS;
-        if (dist < combined_radius && adv->hit_cooldown <= 0) {
-            // Hit! Reduce score and stop hardcore music
-            state->score -= ADVERSARY_SCORE_PENALTY;
-            if (state->score < 0) state->score = 0;
-            audio_on_adversary_hit();
-            adv->hit_cooldown = 2.0f;  // 2 second cooldown before next hit
-        }
-    }
-
-    // Check for ESC key quit
-    if (input_quit_requested()) {
-        state->running = false;
     }
 }
 
