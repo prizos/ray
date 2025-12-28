@@ -7,13 +7,16 @@
 // ============ TREE CONSTANTS ============
 
 // Tree structure limits
-#define MAX_TREES 100
-#define MAX_TREE_HEIGHT 120
-#define MAX_VOXELS_PER_TREE 12000
+#define INITIAL_TREES 16               // Initial allocation, grows as needed
+#define MAX_TREES 10000                // Hard limit to prevent runaway growth
+#define MAX_TREE_HEIGHT 255
+#define INITIAL_VOXELS_PER_TREE 1024   // Initial allocation, grows as needed
+#define MAX_VOXELS_PER_TREE 100000     // Hard limit to prevent runaway growth
 #define MAX_TIPS_PER_TREE 200
 #define MAX_ATTRACTORS 800
 
-// Spatial hash size (prime number > MAX_VOXELS_PER_TREE * 1.3 for good distribution)
+// Spatial hash size (prime number for good distribution)
+// Note: With dynamic voxels, this may need resizing - consider octree for Phase 4
 #define VOXEL_HASH_SIZE 16007
 
 // Growth timing
@@ -108,9 +111,10 @@ typedef struct {
     TreeAlgorithm algorithm;
     bool active;
 
-    // Voxel storage
-    TreeVoxel voxels[MAX_VOXELS_PER_TREE];
+    // Voxel storage (dynamically allocated)
+    TreeVoxel *voxels;
     int voxel_count;
+    int voxel_capacity;
 
     // Spatial hash for O(1) duplicate checking
     VoxelHashEntry voxel_hash[VOXEL_HASH_SIZE];
@@ -139,6 +143,9 @@ typedef struct {
 
 // Initialize a tree at the given position
 void tree_init(Tree *tree, int base_x, int base_y, int base_z, TreeAlgorithm algorithm);
+
+// Cleanup tree resources (frees attractor_octree, etc.)
+void tree_cleanup(Tree *tree);
 
 // Grow a tree by one step
 void tree_grow(Tree *tree);

@@ -14,10 +14,23 @@ static float randf_range(float min, float max) {
 }
 
 // Pack (x,y,z) into a single int for hashing
-// x,z range: roughly -50 to 50, y range: 0 to 120
-// Offset to make positive: x+100, z+100, y stays positive
+// Uses unsigned arithmetic to avoid overflow issues
+// x,z range: clamped to -500 to 500, y range: clamped to 0 to 255
 int tree_pack_key(int x, int y, int z) {
-    return ((x + 100) << 16) | ((z + 100) << 8) | y;
+    // Clamp to safe ranges to prevent overflow
+    if (x < -500) x = -500;
+    if (x > 500) x = 500;
+    if (z < -500) z = -500;
+    if (z > 500) z = 500;
+    if (y < 0) y = 0;
+    if (y > 255) y = 255;
+
+    // Offset to make positive and pack
+    unsigned int ux = (unsigned int)(x + 512);  // 0 to 1024
+    unsigned int uz = (unsigned int)(z + 512);  // 0 to 1024
+    unsigned int uy = (unsigned int)y;          // 0 to 255
+
+    return (int)((ux << 20) | (uz << 8) | uy);
 }
 
 // Hash function for spatial hash
@@ -94,9 +107,30 @@ void tree_hash_clear(Tree *tree) {
 bool tree_add_voxel(Tree *tree, int x, int y, int z, VoxelType type) {
     if (tree->voxel_count >= MAX_VOXELS_PER_TREE) return false;
     if (y > MAX_TREE_HEIGHT || y < 0) return false;
+    if (!tree->voxels) return false;
 
     if (tree_voxel_exists(tree, x, y, z)) {
         return false;
+    }
+
+    // Grow array if needed
+    if (tree->voxel_count >= tree->voxel_capacity) {
+        int new_capacity = tree->voxel_capacity * 2;
+        if (new_capacity > MAX_VOXELS_PER_TREE) {
+            new_capacity = MAX_VOXELS_PER_TREE;
+        }
+        if (new_capacity <= tree->voxel_capacity) {
+            return false;  // Already at max
+        }
+
+        TreeVoxel *new_voxels = (TreeVoxel *)realloc(tree->voxels,
+                                                      sizeof(TreeVoxel) * new_capacity);
+        if (!new_voxels) {
+            TraceLog(LOG_WARNING, "TREE: Failed to grow voxel array to %d", new_capacity);
+            return false;
+        }
+        tree->voxels = new_voxels;
+        tree->voxel_capacity = new_capacity;
     }
 
     int idx = tree->voxel_count;
@@ -536,11 +570,22 @@ void tree_init(Tree *tree, int base_x, int base_y, int base_z, TreeAlgorithm alg
     tree->algorithm = algorithm;
     tree->active = true;
     tree->voxel_count = 0;
+    tree->voxel_capacity = 0;
+    tree->voxels = NULL;
     tree->lsystem_iteration = 0;
     tree->attractor_count = 0;
     tree->sc_branch_count = 0;
     tree->tip_count = 0;
     tree->attractor_octree = NULL;
+
+    // Allocate initial voxel storage
+    tree->voxels = (TreeVoxel *)malloc(sizeof(TreeVoxel) * INITIAL_VOXELS_PER_TREE);
+    if (!tree->voxels) {
+        TraceLog(LOG_ERROR, "TREE: Failed to allocate initial voxels");
+        tree->active = false;
+        return;
+    }
+    tree->voxel_capacity = INITIAL_VOXELS_PER_TREE;
 
     tree_hash_clear(tree);
 
@@ -557,6 +602,26 @@ void tree_init(Tree *tree, int base_x, int base_y, int base_z, TreeAlgorithm alg
             init_agent_tips(tree);
             break;
     }
+}
+
+void tree_cleanup(Tree *tree) {
+    if (!tree) return;
+
+    // Free attractor octree if it exists
+    if (tree->attractor_octree) {
+        attractor_octree_destroy((AttractorOctree *)tree->attractor_octree);
+        tree->attractor_octree = NULL;
+    }
+
+    // Free voxel array
+    if (tree->voxels) {
+        free(tree->voxels);
+        tree->voxels = NULL;
+    }
+    tree->voxel_count = 0;
+    tree->voxel_capacity = 0;
+
+    tree->active = false;
 }
 
 void tree_grow(Tree *tree) {

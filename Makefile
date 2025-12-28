@@ -4,6 +4,9 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -I include
 LDFLAGS = -lraylib -lm
 
+# Enable dependency generation for proper incremental builds
+DEPFLAGS = -MMD -MP
+
 # Platform detection
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -25,10 +28,16 @@ BUILD_DIR = build
 INCLUDE_DIR = include
 TEST_DIR = tests
 
-# Files (exclude test files from main build)
-SRCS = $(filter-out $(SRC_DIR)/test_%.c,$(wildcard $(SRC_DIR)/*.c))
+# Files (exclude test files and standalone tools from main build)
+SRCS = $(filter-out $(SRC_DIR)/test_%.c $(SRC_DIR)/terrain_tune.c,$(wildcard $(SRC_DIR)/*.c))
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
+DEPS = $(OBJS:.o=.d)
 TARGET = game
+
+# Terrain tuning tool (needs tree.c for terrain.c dependencies)
+TUNE_TARGET = terrain_tune
+TUNE_SRCS = $(SRC_DIR)/terrain_tune.c $(SRC_DIR)/terrain.c $(SRC_DIR)/noise.c \
+            $(SRC_DIR)/tree.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c
 
 # Test files
 TEST_SRCS = $(wildcard $(TEST_DIR)/*.c)
@@ -45,13 +54,21 @@ $(BUILD_DIR):
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
-# Compile
+# Compile with dependency generation
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# Include generated dependency files (if they exist)
+-include $(DEPS)
 
 # Run the game
+# Usage: make run [SEED=12345] [TREES=50]
+SEED ?=
+TREES ?=
+RUN_ARGS := $(if $(SEED),-s $(SEED)) $(if $(TREES),-t $(TREES))
+
 run: all
-	./$(TARGET)
+	./$(TARGET) $(RUN_ARGS)
 
 # Debug build
 debug: CFLAGS += -g -DDEBUG
@@ -83,11 +100,40 @@ test-unit: $(BUILD_DIR)
 	./$(BUILD_DIR)/test_tree
 	./$(BUILD_DIR)/test_terrain
 
-# Clean
+# Clean (removes build dir with all .o and .d files)
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(TUNE_TARGET)
 
 # Rebuild
 rebuild: clean all
 
-.PHONY: all run debug clean rebuild test test-growth
+# ============ TERRAIN TUNING ============
+
+# Build the terrain tuning tool
+$(TUNE_TARGET): $(BUILD_DIR) $(TUNE_SRCS)
+	$(CC) $(CFLAGS) $(TUNE_SRCS) -o $(TUNE_TARGET) $(LDFLAGS)
+
+# Generate terrain preview images
+# Usage: make tune-terrain [SEED=12345]
+tune-terrain: $(TUNE_TARGET)
+	@mkdir -p terrain_output
+	./$(TUNE_TARGET) $(if $(SEED),-s $(SEED))
+
+# Create template config file
+tune-init: $(TUNE_TARGET)
+	./$(TUNE_TARGET) --create-template
+
+# Generate single center terrain (no variations)
+tune-single: $(TUNE_TARGET)
+	@mkdir -p terrain_output
+	./$(TUNE_TARGET) --single $(if $(SEED),-s $(SEED))
+
+# Show what would be generated
+tune-dry-run: $(TUNE_TARGET)
+	./$(TUNE_TARGET) --dry-run $(if $(SEED),-s $(SEED))
+
+# Clean terrain tuning output
+tune-clean:
+	rm -rf terrain_output $(TUNE_TARGET)
+
+.PHONY: all run debug clean rebuild test test-growth tune-terrain tune-init tune-single tune-dry-run tune-clean

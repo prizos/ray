@@ -5,11 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
 
 // ============ BENCHMARK CONFIGURATION ============
 
 typedef struct {
     int num_trees;
+    uint32_t seed;           // Terrain seed (0 = random)
     bool benchmark_mode;
     float benchmark_duration;
     char output_file[256];
@@ -30,6 +32,7 @@ typedef struct {
 static void print_usage(const char *program) {
     printf("Usage: %s [options]\n", program);
     printf("Options:\n");
+    printf("  -s, --seed N        Terrain seed for reproducible worlds (default: random)\n");
     printf("  -t, --trees N       Number of trees to spawn (default: auto grid)\n");
     printf("  -b, --benchmark     Run in benchmark mode (auto-exit after duration)\n");
     printf("  -d, --duration N    Benchmark duration in seconds (default: 10)\n");
@@ -40,13 +43,18 @@ static void print_usage(const char *program) {
 static Config parse_args(int argc, char *argv[]) {
     Config config = {
         .num_trees = -1,  // -1 means use default grid pattern
+        .seed = 0,        // 0 means random seed
         .benchmark_mode = false,
         .benchmark_duration = 10.0f,
         .output_file = ""
     };
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--trees") == 0) {
+        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
+            if (i + 1 < argc) {
+                config.seed = (uint32_t)strtoul(argv[++i], NULL, 10);
+            }
+        } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--trees") == 0) {
             if (i + 1 < argc) {
                 config.num_trees = atoi(argv[++i]);
             }
@@ -198,11 +206,7 @@ int main(int argc, char *argv[])
 
     // Initialize game state
     static GameState state = {0};
-    if (config.num_trees >= 0) {
-        game_init_with_trees(&state, config.num_trees);
-    } else {
-        game_init(&state);
-    }
+    game_init_full(&state, config.num_trees, config.seed);
 
     // Initialize rendering
     render_init();

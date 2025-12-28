@@ -5,6 +5,8 @@
 #include "tree.h"
 #include "terrain.h"
 #include "beaver.h"
+#include "water.h"
+#include <stdint.h>
 
 // ============ DISPLAY CONSTANTS ============
 
@@ -27,7 +29,8 @@
 
 typedef enum {
     TOOL_TREE,
-    TOOL_BURN
+    TOOL_BURN,
+    TOOL_WATER
 } ToolType;
 
 // ============ GAME STATE ============
@@ -41,14 +44,26 @@ typedef struct GameState {
     // Current tool
     ToolType current_tool;
 
+    // Target indicator (for debugging placement)
+    bool target_valid;
+    int target_grid_x;
+    int target_grid_z;
+    float target_world_x;
+    float target_world_y;
+    float target_world_z;
+
     // Terrain
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
     TerrainBurnState terrain_burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
     float terrain_burn_timer[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
 
-    // Trees (dynamically allocated)
+    // Water simulation
+    WaterState water;
+
+    // Trees (dynamically allocated, grows as needed)
     Tree *trees;
     int tree_count;
+    int tree_capacity;
 
     // Beavers
     Beaver beavers[MAX_BEAVERS];
@@ -65,7 +80,9 @@ typedef struct GameState {
 // ============ GAME FUNCTIONS ============
 
 void game_init(GameState *state);
+void game_init_with_seed(GameState *state, uint32_t seed);
 void game_init_with_trees(GameState *state, int num_trees);
+void game_init_full(GameState *state, int num_trees, uint32_t seed);
 void game_update(GameState *state);
 void game_cleanup(GameState *state);
 

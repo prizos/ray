@@ -13,7 +13,6 @@ static const Color ROCK_COLOR = { 158, 154, 146, 255 };
 static const Color UNDERWATER_COLOR = { 120, 110, 90, 255 };
 static const Color FIRE_COLOR = { 255, 100, 20, 255 };
 static const Color SKY_COLOR = { 135, 206, 235, 255 };
-static const Color WATER_COLOR = { 40, 120, 180, 140 };
 
 // Tree colors
 static const Color TRUNK_COLOR = { 72, 50, 35, 255 };
@@ -52,11 +51,15 @@ typedef enum {
     GROUP_BEAVER_NOSE,
     GROUP_BEAVER_TEETH,
     GROUP_BEAVER_EYE,
+    GROUP_WATER_SHALLOW,
+    GROUP_WATER_DEEP,
     GROUP_COUNT
 } ColorGroup;
 
 // Max instances per group
-#define MAX_INSTANCES (MAX_TREES * MAX_VOXELS_PER_TREE + TERRAIN_RESOLUTION * TERRAIN_RESOLUTION)
+// Conservative estimate: 100 trees × ~8000 avg voxels + terrain + beavers
+// This caps memory usage while supporting most gameplay scenarios
+#define MAX_INSTANCES 1000000
 
 // Instance data
 static Mesh cubeMesh;
@@ -127,7 +130,9 @@ void render_init(void)
         BEAVER_TAIL_COLOR,
         BEAVER_NOSE_COLOR,
         BEAVER_TEETH_COLOR,
-        BEAVER_EYE_COLOR
+        BEAVER_EYE_COLOR,
+        { 80, 170, 220, 160 },  // Water shallow (lighter blue, semi-transparent)
+        { 30, 100, 180, 200 }   // Water deep (darker blue, more opaque)
     };
 
     for (int i = 0; i < GROUP_COUNT; i++) {
@@ -141,12 +146,22 @@ void render_init(void)
 
         // Allocate transform arrays
         instanceTransforms[i] = (Matrix *)malloc(sizeof(Matrix) * MAX_INSTANCES);
+        if (!instanceTransforms[i]) {
+            TraceLog(LOG_ERROR, "RENDER: Failed to allocate instance transforms for group %d", i);
+            // Clean up already allocated
+            for (int j = 0; j < i; j++) {
+                free(instanceTransforms[j]);
+                instanceTransforms[j] = NULL;
+            }
+            return;
+        }
         instanceCounts[i] = 0;
     }
 
     initialized = true;
-    TraceLog(LOG_INFO, "RENDER: Initialized with %s rendering",
-             useInstancing ? "INSTANCED" : "FALLBACK");
+    TraceLog(LOG_INFO, "RENDER: Initialized with %s rendering", useInstancing ? "INSTANCED" : "FALLBACK");
+    TraceLog(LOG_INFO, "RENDER: Allocated %zu MB for instance transforms",
+             (sizeof(Matrix) * MAX_INSTANCES * GROUP_COUNT) / (1024 * 1024));
 }
 
 // ============ HELPER FUNCTIONS ============
@@ -162,6 +177,20 @@ static inline void add_instance(ColorGroup group, float x, float y, float z, flo
     m->m1 = 0;     m->m5 = size;  m->m9 = 0;      m->m13 = y;
     m->m2 = 0;     m->m6 = 0;     m->m10 = size;  m->m14 = z;
     m->m3 = 0;     m->m7 = 0;     m->m11 = 0;     m->m15 = 1;
+}
+
+// Add instance with non-uniform scale (no rotation)
+static inline void add_instance_scaled(ColorGroup group, float x, float y, float z,
+                                        float sx, float sy, float sz) {
+    if (instanceCounts[group] >= MAX_INSTANCES) return;
+
+    Matrix *m = &instanceTransforms[group][instanceCounts[group]++];
+
+    // Build scale + translate matrix
+    m->m0 = sx;  m->m4 = 0;   m->m8 = 0;    m->m12 = x;
+    m->m1 = 0;   m->m5 = sy;  m->m9 = 0;    m->m13 = y;
+    m->m2 = 0;   m->m6 = 0;   m->m10 = sz;  m->m14 = z;
+    m->m3 = 0;   m->m7 = 0;   m->m11 = 0;   m->m15 = 1;
 }
 
 // Add instance with non-uniform scale and Y-axis rotation
@@ -372,16 +401,59 @@ void render_frame(const GameState *state)
             leg_w * 1.2f, leg_h, leg_w * 1.3f, angle);
     }
 
+    // ========== COLLECT WATER INSTANCES ==========
+    // Using [x][z] indexing to match terrain convention
+    if (state->water.initialized) {
+        const float DEPTH_THRESHOLD = 0.05f;  // Minimum depth to render
+        const float DEEP_THRESHOLD = 2.0f;    // Depth at which water is "deep"
+
+        for (int x = 0; x < WATER_RESOLUTION; x++) {
+            for (int z = 0; z < WATER_RESOLUTION; z++) {
+                float depth = FIXED_TO_FLOAT(state->water.cells[x][z].water_height);
+                if (depth < DEPTH_THRESHOLD) continue;
+
+                // World position - must match terrain positioning exactly
+                // Terrain uses: world_x = x * TERRAIN_SCALE (cube centered there)
+                float world_x = x * TERRAIN_SCALE;
+                float world_z = z * TERRAIN_SCALE;
+
+                // Terrain height in voxel units
+                int terrain_h = FIXED_TO_INT(state->water.terrain_height[x][z]);
+
+                // Terrain cube is centered at (terrain_h * TERRAIN_SCALE)
+                // Its TOP is at (terrain_h * TERRAIN_SCALE) + TERRAIN_SCALE/2
+                float terrain_top = (terrain_h * TERRAIN_SCALE) + (TERRAIN_SCALE / 2.0f);
+
+                // Water height in world units
+                float water_height = depth * TERRAIN_SCALE;
+                if (water_height < 0.5f) water_height = 0.5f;  // Minimum visible height
+                if (water_height > 50.0f) water_height = 50.0f;
+
+                // Water cube center: sits on top of terrain
+                float water_y = terrain_top + (water_height / 2.0f);
+
+                // Choose shallow or deep based on depth
+                ColorGroup group = (depth > DEEP_THRESHOLD) ? GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
+
+                // Add water cube - use TERRAIN_SCALE to match terrain cube size exactly
+                add_instance_scaled(group, world_x, water_y, world_z,
+                                   TERRAIN_SCALE, water_height, TERRAIN_SCALE);
+            }
+        }
+    }
+
     // ========== DRAW ==========
     BeginDrawing();
     ClearBackground(SKY_COLOR);
 
     BeginMode3D(state->camera);
 
-    // Draw all groups
+    // Draw opaque groups first (all except water)
     if (useInstancing) {
         // GPU instanced rendering - one draw call per color group
         for (int i = 0; i < GROUP_COUNT; i++) {
+            // Skip water groups for now (draw them last for transparency)
+            if (i == GROUP_WATER_SHALLOW || i == GROUP_WATER_DEEP) continue;
             if (instanceCounts[i] > 0) {
                 DrawMeshInstanced(cubeMesh, cubeMaterials[i], instanceTransforms[i], instanceCounts[i]);
             }
@@ -389,33 +461,74 @@ void render_frame(const GameState *state)
     } else {
         // Fallback: individual DrawMesh calls
         for (int i = 0; i < GROUP_COUNT; i++) {
+            if (i == GROUP_WATER_SHALLOW || i == GROUP_WATER_DEEP) continue;
             for (int j = 0; j < instanceCounts[i]; j++) {
                 DrawMesh(cubeMesh, cubeMaterials[i], instanceTransforms[i][j]);
             }
         }
     }
 
-    // Draw water plane
-    float water_y = WATER_LEVEL * TERRAIN_SCALE + 0.3f;
-    float terrain_size = TERRAIN_RESOLUTION * TERRAIN_SCALE;
-    float water_center = terrain_size / 2.0f;
-    DrawPlane(
-        (Vector3){ water_center, water_y, water_center },
-        (Vector2){ terrain_size, terrain_size },
-        WATER_COLOR
-    );
+    // Draw dynamic water instances last (for transparency)
+    // Water groups are semi-transparent and should be rendered after opaque geometry
+    if (useInstancing) {
+        if (instanceCounts[GROUP_WATER_SHALLOW] > 0) {
+            DrawMeshInstanced(cubeMesh, cubeMaterials[GROUP_WATER_SHALLOW],
+                             instanceTransforms[GROUP_WATER_SHALLOW],
+                             instanceCounts[GROUP_WATER_SHALLOW]);
+        }
+        if (instanceCounts[GROUP_WATER_DEEP] > 0) {
+            DrawMeshInstanced(cubeMesh, cubeMaterials[GROUP_WATER_DEEP],
+                             instanceTransforms[GROUP_WATER_DEEP],
+                             instanceCounts[GROUP_WATER_DEEP]);
+        }
+    } else {
+        for (int j = 0; j < instanceCounts[GROUP_WATER_SHALLOW]; j++) {
+            DrawMesh(cubeMesh, cubeMaterials[GROUP_WATER_SHALLOW],
+                    instanceTransforms[GROUP_WATER_SHALLOW][j]);
+        }
+        for (int j = 0; j < instanceCounts[GROUP_WATER_DEEP]; j++) {
+            DrawMesh(cubeMesh, cubeMaterials[GROUP_WATER_DEEP],
+                    instanceTransforms[GROUP_WATER_DEEP][j]);
+        }
+    }
 
     EndMode3D();
+
+    // Draw target indicator in a separate 3D pass (avoids shader conflicts)
+    if (state->target_valid) {
+        BeginMode3D(state->camera);
+        Vector3 target_pos = {
+            state->target_world_x,
+            state->target_world_y,
+            state->target_world_z
+        };
+        // Draw wireframe cube at target (size matches one grid cell)
+        DrawCubeWires(target_pos, CELL_SIZE, CELL_SIZE, CELL_SIZE, RED);
+        // Draw crosshair lines extending up
+        DrawLine3D(
+            (Vector3){target_pos.x, target_pos.y, target_pos.z},
+            (Vector3){target_pos.x, target_pos.y + 20.0f, target_pos.z},
+            RED
+        );
+        EndMode3D();
+    }
 
     // ========== UI ==========
     DrawRectangle(10, 10, 310, 195, Fade(BLACK, 0.7f));
     DrawText("Tree Growth Simulator", 20, 15, 20, WHITE);
 
-    const char *tool_name = (state->current_tool == TOOL_BURN) ? "BURN" : "TREE";
-    Color tool_color = (state->current_tool == TOOL_BURN) ? ORANGE : GREEN;
+    const char *tool_name = "TREE";
+    Color tool_color = GREEN;
+    if (state->current_tool == TOOL_BURN) {
+        tool_name = "BURN";
+        tool_color = ORANGE;
+    } else if (state->current_tool == TOOL_WATER) {
+        tool_name = "WATER";
+        tool_color = (Color){ 80, 170, 220, 255 };
+    }
     DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
 
-    DrawText("1 - Burn tool, 2 - Tree tool", 20, 42, 12, LIGHTGRAY);
+    DrawText("1 - Burn, 2 - Tree, 3 - Water", 20, 42, 12, LIGHTGRAY);
     DrawText("Left-click - Use tool", 20, 57, 12, LIGHTGRAY);
     DrawText("Right-click + drag - Look around", 20, 72, 12, LIGHTGRAY);
     DrawText("WASD - Move, Q/E - Down/Up, Shift - Sprint", 20, 87, 12, LIGHTGRAY);
@@ -440,14 +553,19 @@ void render_frame(const GameState *state)
     DrawText(TextFormat("Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
              20, 165, 11, LIGHTGRAY);
 
+    // Water info
+    int water_cells = instanceCounts[GROUP_WATER_SHALLOW] + instanceCounts[GROUP_WATER_DEEP];
+    float total_water = FIXED_TO_FLOAT(water_calculate_total(&state->water));
+    DrawText(TextFormat("Water: %.1f units (%d cells)", total_water, water_cells),
+             20, 180, 11, (Color){ 80, 170, 220, 255 });
+
     // Rendering info
     int total_instances = 0;
     for (int i = 0; i < GROUP_COUNT; i++) total_instances += instanceCounts[i];
-    DrawText(TextFormat("%s: %d calls (%d instances)",
+    DrawText(TextFormat("%s: %d instances",
              useInstancing ? "Instanced" : "Fallback",
-             useInstancing ? GROUP_COUNT : total_instances,
              total_instances),
-             20, 180, 10, useInstancing ? GREEN : ORANGE);
+             200, 180, 10, useInstancing ? GREEN : ORANGE);
 
     // Legend
     DrawRectangle(SCREEN_WIDTH - 200, 10, 190, 80, Fade(BLACK, 0.7f));
@@ -472,16 +590,32 @@ void render_cleanup(void)
 {
     if (!initialized) return;
 
-    UnloadMesh(cubeMesh);
+    // Free instance transform arrays first
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        if (instanceTransforms[i]) {
+            free(instanceTransforms[i]);
+            instanceTransforms[i] = NULL;
+        }
+    }
 
+    // Reset material shaders to default before unloading to avoid double-free
+    // (all materials share the same instancingShader)
+    Shader defaultShader = { 0 };
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        cubeMaterials[i].shader = defaultShader;
+    }
+
+    // Now unload materials (won't try to free the shader since it's reset)
+    for (int i = 0; i < GROUP_COUNT; i++) {
+        UnloadMaterial(cubeMaterials[i]);
+    }
+
+    // Unload the shared shader once
     if (useInstancing) {
         UnloadShader(instancingShader);
     }
 
-    for (int i = 0; i < GROUP_COUNT; i++) {
-        UnloadMaterial(cubeMaterials[i]);
-        free(instanceTransforms[i]);
-    }
+    UnloadMesh(cubeMesh);
 
     initialized = false;
 }

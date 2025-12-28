@@ -4,7 +4,7 @@
 
 // ============ INITIALIZATION ============
 
-static void game_init_common(GameState *state)
+static void game_init_common(GameState *state, uint32_t seed)
 {
     float grid_center_x = (GRID_WIDTH * CELL_SIZE) / 2.0f;
     float grid_center_z = (GRID_HEIGHT * CELL_SIZE) / 2.0f;
@@ -35,84 +35,143 @@ static void game_init_common(GameState *state)
     state->regen_timer = 0;
     state->paused = false;
     state->current_tool = TOOL_TREE;
+    state->target_valid = false;
 
-    // Initialize terrain
-    terrain_generate(state->terrain_height);
+    // Initialize terrain with seed
+    if (seed == 0) {
+        terrain_generate(state->terrain_height);  // Random seed
+    } else {
+        TerrainConfig config = terrain_config_default(seed);
+        terrain_generate_seeded(state->terrain_height, &config);
+    }
     terrain_burn_init(state->terrain_burn, state->terrain_burn_timer);
+
+    // Initialize water simulation from terrain
+    water_init(&state->water, state->terrain_height);
+
+    // Add some initial test water in the center of the map
+    for (int z = 75; z < 85; z++) {
+        for (int x = 75; x < 85; x++) {
+            water_add(&state->water, x, z, FLOAT_TO_FIXED(2.0f));
+        }
+    }
 
     // Initialize beavers
     beaver_init_all(state->beavers, &state->beaver_count);
 
-    // Allocate trees
+    // Allocate trees (start small, grow as needed)
     if (state->trees == NULL) {
-        state->trees = (Tree *)malloc(sizeof(Tree) * MAX_TREES);
+        state->trees = (Tree *)malloc(sizeof(Tree) * INITIAL_TREES);
         if (state->trees == NULL) {
             TraceLog(LOG_ERROR, "Failed to allocate trees!");
             state->running = false;
             return;
         }
-        TraceLog(LOG_INFO, "Allocated %zu bytes for %d trees", sizeof(Tree) * MAX_TREES, MAX_TREES);
+        state->tree_capacity = INITIAL_TREES;
+        TraceLog(LOG_INFO, "Allocated initial capacity for %d trees", INITIAL_TREES);
     }
     state->tree_count = 0;
 }
 
+// Grow trees array if needed, returns true on success
+static bool game_grow_trees(GameState *state) {
+    if (state->tree_count < state->tree_capacity) {
+        return true;  // No growth needed
+    }
+    if (state->tree_count >= MAX_TREES) {
+        TraceLog(LOG_WARNING, "Cannot add more trees: at maximum (%d)", MAX_TREES);
+        return false;
+    }
+
+    int new_capacity = state->tree_capacity * 2;
+    if (new_capacity > MAX_TREES) {
+        new_capacity = MAX_TREES;
+    }
+
+    Tree *new_trees = (Tree *)realloc(state->trees, sizeof(Tree) * new_capacity);
+    if (!new_trees) {
+        TraceLog(LOG_ERROR, "Failed to grow trees array to %d", new_capacity);
+        return false;
+    }
+
+    state->trees = new_trees;
+    state->tree_capacity = new_capacity;
+    TraceLog(LOG_INFO, "Grew trees array to capacity %d", new_capacity);
+    return true;
+}
+
 void game_init(GameState *state)
 {
-    game_init_common(state);
-    if (!state->running) return;
+    game_init_full(state, -1, 0);
+}
 
-    // Default: grid-spaced trees
-    int spacing = 10;
-    for (int x = 5; x < GRID_WIDTH - 5; x += spacing) {
-        for (int z = 5; z < GRID_HEIGHT - 5; z += spacing) {
-            if (state->tree_count >= MAX_TREES) break;
-
-            int terrain_x = (int)(x * CELL_SIZE / TERRAIN_SCALE);
-            int terrain_z = (int)(z * CELL_SIZE / TERRAIN_SCALE);
-            if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
-            if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
-            int ground_height = state->terrain_height[terrain_x][terrain_z];
-
-            if (ground_height < WATER_LEVEL) continue;
-
-            tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
-            state->tree_count++;
-        }
-    }
+void game_init_with_seed(GameState *state, uint32_t seed)
+{
+    game_init_full(state, -1, seed);
 }
 
 void game_init_with_trees(GameState *state, int num_trees)
 {
-    game_init_common(state);
+    game_init_full(state, num_trees, 0);
+}
+
+void game_init_full(GameState *state, int num_trees, uint32_t seed)
+{
+    game_init_common(state, seed);
     if (!state->running) return;
 
-    if (num_trees > MAX_TREES) num_trees = MAX_TREES;
-    if (num_trees < 0) num_trees = 0;
+    if (num_trees < 0) {
+        // Default: grid-spaced trees
+        int spacing = 10;
+        for (int x = 5; x < GRID_WIDTH - 5; x += spacing) {
+            for (int z = 5; z < GRID_HEIGHT - 5; z += spacing) {
+                // Get terrain height at grid cell center (grid cells are 2x2 terrain cells)
+                // Tree renders at x * CELL_SIZE + CELL_SIZE/2, which is terrain cell 2*x + 1
+                int terrain_x = x * 2 + 1;
+                int terrain_z = z * 2 + 1;
+                if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+                if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+                int ground_height = state->terrain_height[terrain_x][terrain_z];
 
-    // Place trees in a grid pattern to fit requested count
-    int placed = 0;
-    int attempts = 0;
-    int max_attempts = num_trees * 10;
+                // Skip if there's water at this location
+                if (water_get_depth(&state->water, terrain_x, terrain_z) > WATER_MIN_DEPTH) continue;
 
-    while (placed < num_trees && attempts < max_attempts) {
-        int x = 2 + (attempts * 7) % (GRID_WIDTH - 4);
-        int z = 2 + (attempts * 11) % (GRID_HEIGHT - 4);
-
-        int terrain_x = (int)(x * CELL_SIZE / TERRAIN_SCALE);
-        int terrain_z = (int)(z * CELL_SIZE / TERRAIN_SCALE);
-        if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
-        if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
-        int ground_height = state->terrain_height[terrain_x][terrain_z];
-
-        if (ground_height >= WATER_LEVEL) {
-            tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
-            state->tree_count++;
-            placed++;
+                if (!game_grow_trees(state)) break;
+                tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
+                state->tree_count++;
+            }
         }
-        attempts++;
-    }
+    } else {
+        // Place specific number of trees
+        if (num_trees > MAX_TREES) num_trees = MAX_TREES;
 
-    TraceLog(LOG_INFO, "Initialized %d trees (requested %d)", placed, num_trees);
+        int placed = 0;
+        int attempts = 0;
+        int max_attempts = num_trees * 10;
+
+        while (placed < num_trees && attempts < max_attempts) {
+            int x = 2 + (attempts * 7) % (GRID_WIDTH - 4);
+            int z = 2 + (attempts * 11) % (GRID_HEIGHT - 4);
+
+            // Get terrain height at grid cell center (grid cells are 2x2 terrain cells)
+            int terrain_x = x * 2 + 1;
+            int terrain_z = z * 2 + 1;
+            if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+            if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+            int ground_height = state->terrain_height[terrain_x][terrain_z];
+
+            // Only place tree if there's no water at this location
+            if (water_get_depth(&state->water, terrain_x, terrain_z) <= WATER_MIN_DEPTH) {
+                if (!game_grow_trees(state)) break;
+                tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
+                state->tree_count++;
+                placed++;
+            }
+            attempts++;
+        }
+
+        TraceLog(LOG_INFO, "Initialized %d trees (requested %d)", placed, num_trees);
+    }
 }
 
 // ============ UPDATE ============
@@ -142,47 +201,105 @@ void game_update(GameState *state)
     if (IsKeyPressed(KEY_TWO)) {
         state->current_tool = TOOL_TREE;
     }
+    if (IsKeyPressed(KEY_THREE)) {
+        state->current_tool = TOOL_WATER;
+    }
 
-    // ========== CLICK HANDLING ==========
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    // ========== TARGET INDICATOR (raycast against actual terrain) ==========
+    state->target_valid = false;
+    {
         Ray ray = GetMouseRay(GetMousePosition(), state->camera);
 
-        float avg_height = 5.0f * TERRAIN_SCALE;
-        if (ray.direction.y != 0) {
-            float t = (avg_height - ray.position.y) / ray.direction.y;
-            if (t > 0) {
-                float hit_x = ray.position.x + ray.direction.x * t;
-                float hit_z = ray.position.z + ray.direction.z * t;
+        // Only proceed if ray is pointing downward
+        if (ray.direction.y < -0.01f) {
+            // Ray march to find terrain intersection
+            float step_size = 2.0f;  // Step size in world units
+            float max_dist = 500.0f;  // Maximum ray distance
 
-                int terrain_x = (int)(hit_x / TERRAIN_SCALE);
-                int terrain_z = (int)(hit_z / TERRAIN_SCALE);
-                if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
-                if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
-                if (terrain_x < 0) terrain_x = 0;
-                if (terrain_z < 0) terrain_z = 0;
+            for (float t = 0; t < max_dist; t += step_size) {
+                float px = ray.position.x + ray.direction.x * t;
+                float py = ray.position.y + ray.direction.y * t;
+                float pz = ray.position.z + ray.direction.z * t;
 
-                if (state->current_tool == TOOL_TREE) {
-                    int grid_x = (int)(hit_x / CELL_SIZE);
-                    int grid_z = (int)(hit_z / CELL_SIZE);
+                // Convert to terrain coordinates
+                int terrain_x = (int)(px / TERRAIN_SCALE);
+                int terrain_z = (int)(pz / TERRAIN_SCALE);
+
+                // Check bounds
+                if (terrain_x < 0 || terrain_x >= TERRAIN_RESOLUTION ||
+                    terrain_z < 0 || terrain_z >= TERRAIN_RESOLUTION) {
+                    continue;
+                }
+
+                // Get terrain height at this position
+                float terrain_y = state->terrain_height[terrain_x][terrain_z] * TERRAIN_SCALE;
+
+                // Check if ray has gone below terrain
+                if (py <= terrain_y + TERRAIN_SCALE) {
+                    // Found intersection - convert to grid cell
+                    int grid_x = (int)(px / CELL_SIZE);
+                    int grid_z = (int)(pz / CELL_SIZE);
 
                     if (grid_x >= 0 && grid_x < GRID_WIDTH &&
-                        grid_z >= 0 && grid_z < GRID_HEIGHT &&
-                        state->tree_count < MAX_TREES) {
+                        grid_z >= 0 && grid_z < GRID_HEIGHT) {
 
-                        int ground_height = state->terrain_height[terrain_x][terrain_z];
+                        // Get terrain height at grid cell center
+                        int cell_terrain_x = grid_x * 2 + 1;
+                        int cell_terrain_z = grid_z * 2 + 1;
+                        if (cell_terrain_x >= TERRAIN_RESOLUTION) cell_terrain_x = TERRAIN_RESOLUTION - 1;
+                        if (cell_terrain_z >= TERRAIN_RESOLUTION) cell_terrain_z = TERRAIN_RESOLUTION - 1;
+                        int ground_height = state->terrain_height[cell_terrain_x][cell_terrain_z];
 
-                        if (ground_height >= WATER_LEVEL) {
-                            tree_init(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
-                            state->tree_count++;
-                        }
+                        state->target_valid = true;
+                        state->target_grid_x = grid_x;
+                        state->target_grid_z = grid_z;
+                        // World position at cell center
+                        state->target_world_x = grid_x * CELL_SIZE + CELL_SIZE / 2.0f;
+                        state->target_world_y = ground_height * TERRAIN_SCALE + TERRAIN_SCALE / 2.0f;
+                        state->target_world_z = grid_z * CELL_SIZE + CELL_SIZE / 2.0f;
                     }
-                } else if (state->current_tool == TOOL_BURN) {
-                    if (state->terrain_burn[terrain_x][terrain_z] == TERRAIN_NORMAL) {
-                        state->terrain_burn[terrain_x][terrain_z] = TERRAIN_BURNING;
-                        state->terrain_burn_timer[terrain_x][terrain_z] = BURN_DURATION;
-                    }
+                    break;
                 }
             }
+        }
+    }
+
+    // ========== CLICK HANDLING ==========
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && state->target_valid) {
+        int grid_x = state->target_grid_x;
+        int grid_z = state->target_grid_z;
+
+        if (state->current_tool == TOOL_TREE) {
+            // Get terrain height at grid cell center
+            int tree_terrain_x = grid_x * 2 + 1;
+            int tree_terrain_z = grid_z * 2 + 1;
+            if (tree_terrain_x >= TERRAIN_RESOLUTION) tree_terrain_x = TERRAIN_RESOLUTION - 1;
+            if (tree_terrain_z >= TERRAIN_RESOLUTION) tree_terrain_z = TERRAIN_RESOLUTION - 1;
+            int ground_height = state->terrain_height[tree_terrain_x][tree_terrain_z];
+
+            // Only place tree if there's no water at this location
+            if (water_get_depth(&state->water, tree_terrain_x, tree_terrain_z) <= WATER_MIN_DEPTH &&
+                game_grow_trees(state)) {
+                tree_init(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
+                state->tree_count++;
+            }
+        } else if (state->current_tool == TOOL_BURN) {
+            // For burn tool, use the terrain cell under the target
+            int terrain_x = grid_x * 2 + 1;
+            int terrain_z = grid_z * 2 + 1;
+            if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+            if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+
+            if (state->terrain_burn[terrain_x][terrain_z] == TERRAIN_NORMAL) {
+                state->terrain_burn[terrain_x][terrain_z] = TERRAIN_BURNING;
+                state->terrain_burn_timer[terrain_x][terrain_z] = BURN_DURATION;
+            }
+        } else if (state->current_tool == TOOL_WATER) {
+            // For water tool, add water at the target location
+            water_add_at_world(&state->water,
+                              state->target_world_x,
+                              state->target_world_z,
+                              3.0f);  // Add 3 units of water depth
         }
     }
 
@@ -246,7 +363,8 @@ void game_update(GameState *state)
     if (state->burn_timer >= BURN_SPREAD_INTERVAL) {
         state->burn_timer = 0;
         terrain_burn_update(state->terrain_burn, state->terrain_burn_timer,
-                           state->terrain_height, state->trees, state->tree_count);
+                           state->terrain_height, &state->water,
+                           state->trees, state->tree_count);
     }
 
     // ========== TREE REGENERATION ==========
@@ -272,14 +390,25 @@ void game_update(GameState *state)
             }
         }
     }
+
+    // ========== WATER SIMULATION ==========
+    if (!state->paused) {
+        water_update(&state->water, delta);
+    }
 }
 
 // ============ CLEANUP ============
 
 void game_cleanup(GameState *state)
 {
+    // Clean up each tree's resources (attractor octrees, etc.)
     if (state->trees != NULL) {
+        for (int i = 0; i < state->tree_count; i++) {
+            tree_cleanup(&state->trees[i]);
+        }
         free(state->trees);
         state->trees = NULL;
     }
+    state->tree_count = 0;
+    state->tree_capacity = 0;
 }

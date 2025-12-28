@@ -1,6 +1,9 @@
 #include "terrain.h"
+#include "water.h"
+#include "noise.h"
 #include <math.h>
 #include <stdlib.h>
+#include <time.h>
 
 // Grid settings (needed for tree position conversion)
 #define CELL_SIZE 5.0f
@@ -9,24 +12,60 @@ static float randf(void) {
     return (float)GetRandomValue(0, 10000) / 10000.0f;
 }
 
-void terrain_generate(int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION]) {
+TerrainConfig terrain_config_default(uint32_t seed) {
+    TerrainConfig config = {
+        .seed = seed,
+        .octaves = TERRAIN_DEFAULT_OCTAVES,
+        .lacunarity = TERRAIN_DEFAULT_LACUNARITY,
+        .persistence = TERRAIN_DEFAULT_PERSISTENCE,
+        .scale = TERRAIN_DEFAULT_SCALE,
+        .height_min = TERRAIN_HEIGHT_MIN,
+        .height_max = TERRAIN_HEIGHT_MAX
+    };
+    return config;
+}
+
+void terrain_generate_seeded(int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
+                             const TerrainConfig *config) {
+    // Initialize noise with the provided seed
+    noise_init(config->seed);
+
+    // Build noise configuration for FBM
+    NoiseConfig noise_cfg = {
+        .seed = config->seed,
+        .octaves = config->octaves,
+        .lacunarity = config->lacunarity,
+        .persistence = config->persistence,
+        .scale = config->scale
+    };
+
     for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
         for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
-            float fx = (float)x / TERRAIN_RESOLUTION;
-            float fz = (float)z / TERRAIN_RESOLUTION;
+            // Get FBM noise value at this position
+            float noise_val = noise_fbm2d((float)x, (float)z, &noise_cfg);
 
-            // Layered sine waves for natural-looking terrain
-            float h = 0;
-            h += sinf(fx * 3.0f * PI) * cosf(fz * 2.5f * PI) * 4.0f;
-            h += sinf(fx * 7.0f * PI + 1.0f) * sinf(fz * 6.0f * PI) * 2.0f;
-            h += cosf(fx * 12.0f * PI) * cosf(fz * 11.0f * PI + 0.5f) * 1.0f;
+            // Remap from [-1, 1] to [height_min, height_max]
+            float normalized = noise_normalize(noise_val);
+            int h = config->height_min +
+                    (int)(normalized * (float)(config->height_max - config->height_min));
 
-            h += 5.0f;
-            if (h < 0) h = 0;
+            // Clamp just in case
+            if (h < config->height_min) h = config->height_min;
+            if (h > config->height_max) h = config->height_max;
 
-            height[x][z] = (int)h;
+            height[x][z] = h;
         }
     }
+
+    TraceLog(LOG_INFO, "Terrain generated with seed %u (octaves=%d, scale=%.3f)",
+             config->seed, config->octaves, config->scale);
+}
+
+void terrain_generate(int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION]) {
+    // Use time-based seed for variety when no seed is specified
+    uint32_t seed = (uint32_t)time(NULL);
+    TerrainConfig config = terrain_config_default(seed);
+    terrain_generate_seeded(height, &config);
 }
 
 void terrain_burn_init(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
@@ -42,7 +81,10 @@ void terrain_burn_init(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUT
 void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          float timers[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          const int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
+                         const WaterState *water,
                          Tree *trees, int tree_count) {
+
+    (void)height;  // No longer used for water check
 
     // ========== TERRAIN FIRE SPREAD ==========
     // Only update burning cells, O(burning_cells)
@@ -60,8 +102,9 @@ void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOL
                     int nz = z + dz;
                     if (nx >= 0 && nx < TERRAIN_RESOLUTION &&
                         nz >= 0 && nz < TERRAIN_RESOLUTION) {
+                        // Fire doesn't spread to cells with water
                         if (burn[nx][nz] == TERRAIN_NORMAL &&
-                            height[nx][nz] >= WATER_LEVEL) {
+                            water_get_depth(water, nx, nz) <= WATER_MIN_DEPTH) {
                             if (randf() < BURN_SPREAD_CHANCE) {
                                 burn[nx][nz] = TERRAIN_BURNING;
                                 timers[nx][nz] = BURN_DURATION;
