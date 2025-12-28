@@ -80,11 +80,8 @@ void terrain_burn_init(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUT
 
 void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          float timers[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
-                         const int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          const WaterState *water,
                          Tree *trees, int tree_count) {
-
-    (void)height;  // No longer used for water check
 
     // ========== TERRAIN FIRE SPREAD ==========
     // Only update burning cells, O(burning_cells)

@@ -82,11 +82,6 @@ void water_reset(WaterState *water) {
     for (int x = 0; x < WATER_RESOLUTION; x++) {
         for (int z = 0; z < WATER_RESOLUTION; z++) {
             water->cells[x][z].water_height = 0;
-            water->cells[x][z].flow_north = 0;
-            water->cells[x][z].flow_south = 0;
-            water->cells[x][z].flow_east = 0;
-            water->cells[x][z].flow_west = 0;
-            water->cells[x][z].flow_down = 0;
         }
     }
     water->tick = 0;

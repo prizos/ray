@@ -76,7 +76,6 @@ void terrain_burn_init(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUT
 // Fire won't spread to cells with water on them
 void terrain_burn_update(TerrainBurnState burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          float timers[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
-                         const int height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION],
                          const WaterState *water,
                          Tree *trees, int tree_count);
 

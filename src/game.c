@@ -363,8 +363,7 @@ void game_update(GameState *state)
     if (state->burn_timer >= BURN_SPREAD_INTERVAL) {
         state->burn_timer = 0;
         terrain_burn_update(state->terrain_burn, state->terrain_burn_timer,
-                           state->terrain_height, &state->water,
-                           state->trees, state->tree_count);
+                           &state->water, state->trees, state->tree_count);
     }
 
     // ========== TREE REGENERATION ==========

@@ -69,14 +69,9 @@ static inline fixed16_t fixed_div(fixed16_t a, fixed16_t b) {
 
 // ============ WATER DATA STRUCTURES ============
 
-// Per-cell water state (24 bytes)
+// Per-cell water state (4 bytes)
 typedef struct {
     fixed16_t water_height;   // Water depth at this cell
-    fixed16_t flow_north;     // Pipe flow to north neighbor
-    fixed16_t flow_south;     // Pipe flow to south neighbor
-    fixed16_t flow_east;      // Pipe flow to east neighbor
-    fixed16_t flow_west;      // Pipe flow to west neighbor
-    fixed16_t flow_down;      // Vertical flow (waterfalls)
 } WaterCell;
 
 // Complete water simulation state
