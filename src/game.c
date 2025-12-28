@@ -94,6 +94,8 @@ static bool tree_add_voxel(Tree *tree, int x, int y, int z, VoxelType type) {
     tree->voxels[idx].y = y;
     tree->voxels[idx].z = z;
     tree->voxels[idx].type = type;
+    tree->voxels[idx].burn_state = VOXEL_NORMAL;
+    tree->voxels[idx].burn_timer = 0;
     tree->voxels[idx].active = true;
     tree->voxel_count++;
 
@@ -249,6 +251,9 @@ static void init_space_colonization(Tree *tree) {
 }
 
 static void grow_space_colonization(Tree *tree) {
+    // Stop growing if near capacity
+    if (tree->voxel_count >= MAX_VOXELS_PER_TREE - 100) return;
+
     float influence_radius = 15.0f;
     float kill_radius = 3.0f;
 
@@ -612,7 +617,30 @@ void game_init(GameState *state)
 
     state->running = true;
     state->growth_timer = 0;
+    state->burn_timer = 0;
+    state->regen_timer = 0;
     state->paused = false;
+    state->current_tool = TOOL_TREE;
+
+    // Initialize terrain burn state
+    for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
+        for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
+            state->terrain_burn[x][z] = TERRAIN_NORMAL;
+            state->terrain_burn_timer[x][z] = 0;
+        }
+    }
+
+    // Allocate trees dynamically (only once, reuse on reset)
+    if (state->trees == NULL) {
+        state->trees = (Tree *)malloc(sizeof(Tree) * MAX_TREES);
+        if (state->trees == NULL) {
+            TraceLog(LOG_ERROR, "Failed to allocate trees!");
+            state->running = false;
+            return;
+        }
+        TraceLog(LOG_INFO, "Allocated %zu bytes for %d trees", sizeof(Tree) * MAX_TREES, MAX_TREES);
+    }
+    state->tree_count = 0;
 
     // Generate terrain with hills and valleys using layered noise
     for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
@@ -673,6 +701,65 @@ void game_update(GameState *state)
     if (IsKeyPressed(KEY_R)) {
         game_init(state);
         return;
+    }
+
+    // Tool switching
+    if (IsKeyPressed(KEY_ONE)) {
+        state->current_tool = TOOL_BURN;
+    }
+    if (IsKeyPressed(KEY_TWO)) {
+        state->current_tool = TOOL_TREE;
+    }
+
+    // ========== CLICK HANDLING ==========
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        // Cast ray from camera through mouse position
+        Ray ray = GetMouseRay(GetMousePosition(), state->camera);
+
+        // Find intersection with ground plane (approximate at average terrain height)
+        float avg_height = 5.0f * TERRAIN_SCALE;
+        if (ray.direction.y != 0) {
+            float t = (avg_height - ray.position.y) / ray.direction.y;
+            if (t > 0) {
+                // Calculate hit position
+                float hit_x = ray.position.x + ray.direction.x * t;
+                float hit_z = ray.position.z + ray.direction.z * t;
+
+                // Get terrain coordinates
+                int terrain_x = (int)(hit_x / TERRAIN_SCALE);
+                int terrain_z = (int)(hit_z / TERRAIN_SCALE);
+                if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+                if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+                if (terrain_x < 0) terrain_x = 0;
+                if (terrain_z < 0) terrain_z = 0;
+
+                if (state->current_tool == TOOL_TREE) {
+                    // Convert to grid coordinates
+                    int grid_x = (int)(hit_x / CELL_SIZE);
+                    int grid_z = (int)(hit_z / CELL_SIZE);
+
+                    // Check bounds
+                    if (grid_x >= 0 && grid_x < GRID_WIDTH &&
+                        grid_z >= 0 && grid_z < GRID_HEIGHT &&
+                        state->tree_count < MAX_TREES) {
+
+                        int ground_height = state->terrain_height[terrain_x][terrain_z];
+
+                        // Don't spawn in water
+                        if (ground_height >= WATER_LEVEL) {
+                            init_tree(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
+                            state->tree_count++;
+                        }
+                    }
+                } else if (state->current_tool == TOOL_BURN) {
+                    // Start fire at clicked location
+                    if (state->terrain_burn[terrain_x][terrain_z] == TERRAIN_NORMAL) {
+                        state->terrain_burn[terrain_x][terrain_z] = TERRAIN_BURNING;
+                        state->terrain_burn_timer[terrain_x][terrain_z] = BURN_DURATION;
+                    }
+                }
+            }
+        }
     }
 
     // ========== CAMERA CONTROLS ==========
@@ -739,6 +826,176 @@ void game_update(GameState *state)
         state->camera.position.z + cos_yaw * cos_pitch
     };
 
+    // ========== FIRE SPREAD AND BURN LOGIC ==========
+    state->burn_timer += delta;
+    if (state->burn_timer >= BURN_SPREAD_INTERVAL) {
+        state->burn_timer = 0;
+
+        // Process terrain burning and spread
+        for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
+            for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
+                if (state->terrain_burn[x][z] == TERRAIN_BURNING) {
+                    state->terrain_burn_timer[x][z] -= BURN_SPREAD_INTERVAL;
+
+                    // Spread to neighbors
+                    for (int dx = -1; dx <= 1; dx++) {
+                        for (int dz = -1; dz <= 1; dz++) {
+                            if (dx == 0 && dz == 0) continue;
+                            int nx = x + dx;
+                            int nz = z + dz;
+                            if (nx >= 0 && nx < TERRAIN_RESOLUTION &&
+                                nz >= 0 && nz < TERRAIN_RESOLUTION) {
+                                // Only spread to normal terrain above water
+                                if (state->terrain_burn[nx][nz] == TERRAIN_NORMAL &&
+                                    state->terrain_height[nx][nz] >= WATER_LEVEL) {
+                                    // Random spread chance
+                                    if (randf() < 0.3f) {
+                                        state->terrain_burn[nx][nz] = TERRAIN_BURNING;
+                                        state->terrain_burn_timer[nx][nz] = BURN_DURATION;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Transition to burned after timer expires
+                    if (state->terrain_burn_timer[x][z] <= 0) {
+                        state->terrain_burn[x][z] = TERRAIN_BURNED;
+                    }
+
+                    // Burn trees at this terrain location
+                    float world_x = x * TERRAIN_SCALE;
+                    float world_z = z * TERRAIN_SCALE;
+
+                    for (int t = 0; t < state->tree_count; t++) {
+                        Tree *tree = &state->trees[t];
+                        if (!tree->active) continue;
+
+                        // Check if tree is near this burning terrain
+                        float tree_world_x = tree->base_x * CELL_SIZE;
+                        float tree_world_z = tree->base_z * CELL_SIZE;
+                        float dist = sqrtf((tree_world_x - world_x) * (tree_world_x - world_x) +
+                                          (tree_world_z - world_z) * (tree_world_z - world_z));
+
+                        if (dist < TERRAIN_SCALE * 2) {
+                            // Burn voxels from bottom up
+                            for (int v = 0; v < tree->voxel_count; v++) {
+                                TreeVoxel *voxel = &tree->voxels[v];
+                                if (!voxel->active) continue;
+
+                                // Fire spreads upward through tree
+                                if (voxel->burn_state == VOXEL_NORMAL) {
+                                    // Start burning low voxels first
+                                    if (voxel->y < 15 || randf() < 0.1f) {
+                                        voxel->burn_state = VOXEL_BURNING;
+                                        voxel->burn_timer = BURN_DURATION;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update tree voxel burn states
+        for (int t = 0; t < state->tree_count; t++) {
+            Tree *tree = &state->trees[t];
+            if (!tree->active) continue;
+
+            for (int v = 0; v < tree->voxel_count; v++) {
+                TreeVoxel *voxel = &tree->voxels[v];
+                if (!voxel->active) continue;
+
+                if (voxel->burn_state == VOXEL_BURNING) {
+                    voxel->burn_timer -= BURN_SPREAD_INTERVAL;
+
+                    // Spread fire upward and sideways within tree
+                    for (int v2 = 0; v2 < tree->voxel_count; v2++) {
+                        TreeVoxel *other = &tree->voxels[v2];
+                        if (!other->active || other->burn_state != VOXEL_NORMAL) continue;
+
+                        int dx = abs(other->x - voxel->x);
+                        int dy = other->y - voxel->y;  // Fire spreads UP
+                        int dz = abs(other->z - voxel->z);
+
+                        // Spread to adjacent voxels, preferring upward
+                        if (dx <= 1 && dz <= 1 && dy >= 0 && dy <= 2) {
+                            if (randf() < 0.4f) {
+                                other->burn_state = VOXEL_BURNING;
+                                other->burn_timer = BURN_DURATION;
+                            }
+                        }
+                    }
+
+                    // Transition based on voxel type
+                    if (voxel->burn_timer <= 0) {
+                        if (voxel->type == VOXEL_LEAF) {
+                            // Leaves disappear after burning
+                            voxel->active = false;
+                            tree->leaf_count--;
+                        } else {
+                            // Trunk and branches become charred
+                            voxel->burn_state = VOXEL_BURNED;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========== TREE REGENERATION OF BURNED TERRAIN ==========
+    state->regen_timer += delta;
+    if (state->regen_timer >= REGEN_INTERVAL) {
+        state->regen_timer = 0;
+
+        // Each healthy tree regenerates nearby burned terrain
+        for (int t = 0; t < state->tree_count; t++) {
+            Tree *tree = &state->trees[t];
+            if (!tree->active) continue;
+
+            // Check if tree has any healthy (non-burned) leaves
+            bool has_healthy_leaves = false;
+            for (int v = 0; v < tree->voxel_count; v++) {
+                if (tree->voxels[v].active &&
+                    tree->voxels[v].type == VOXEL_LEAF &&
+                    tree->voxels[v].burn_state == VOXEL_NORMAL) {
+                    has_healthy_leaves = true;
+                    break;
+                }
+            }
+
+            if (!has_healthy_leaves) continue;
+
+            // Get tree's terrain position
+            int tree_terrain_x = (int)(tree->base_x * CELL_SIZE / TERRAIN_SCALE);
+            int tree_terrain_z = (int)(tree->base_z * CELL_SIZE / TERRAIN_SCALE);
+
+            // Regenerate burned terrain in radius around tree
+            for (int dx = -TREE_REGEN_RADIUS; dx <= TREE_REGEN_RADIUS; dx++) {
+                for (int dz = -TREE_REGEN_RADIUS; dz <= TREE_REGEN_RADIUS; dz++) {
+                    int tx = tree_terrain_x + dx;
+                    int tz = tree_terrain_z + dz;
+
+                    // Bounds check
+                    if (tx < 0 || tx >= TERRAIN_RESOLUTION ||
+                        tz < 0 || tz >= TERRAIN_RESOLUTION) continue;
+
+                    // Only regenerate burned terrain (not actively burning)
+                    if (state->terrain_burn[tx][tz] != TERRAIN_BURNED) continue;
+
+                    // Regeneration chance based on distance (closer = faster)
+                    float dist = sqrtf((float)(dx*dx + dz*dz));
+                    float regen_chance = 0.3f * (1.0f - dist / (TREE_REGEN_RADIUS + 1));
+
+                    if (randf() < regen_chance) {
+                        state->terrain_burn[tx][tz] = TERRAIN_NORMAL;
+                    }
+                }
+            }
+        }
+    }
+
     // Tree growth
     if (!state->paused) {
         state->growth_timer += delta;
@@ -767,5 +1024,8 @@ void game_update(GameState *state)
 
 void game_cleanup(GameState *state)
 {
-    (void)state;
+    if (state->trees != NULL) {
+        free(state->trees);
+        state->trees = NULL;
+    }
 }

@@ -4,12 +4,18 @@
 static const Color GRASS_LOW_COLOR = { 141, 168, 104, 255 }; // Sage green (valleys)
 static const Color GRASS_HIGH_COLOR = { 169, 186, 131, 255 };// Lighter green (hills)
 static const Color ROCK_COLOR = { 158, 154, 146, 255 };      // Grey stone for peaks
-static const Color WATER_COLOR = { 72, 145, 188, 220 };      // Bright blue
+
+// Burned terrain colors
+static const Color FIRE_COLOR = { 255, 100, 20, 255 };       // Bright orange fire
 
 // Tree part colors - warm browns and vibrant green
 static const Color TRUNK_COLOR = { 72, 50, 35, 255 };        // Dark brown
 static const Color BRANCH_COLOR = { 92, 64, 45, 255 };       // Medium brown
 static const Color LEAF_COLOR = { 50, 180, 70, 255 };        // Vibrant green
+
+// Burned tree colors
+static const Color BURNING_LEAF_COLOR = { 255, 60, 20, 255 };  // Red/orange burning leaves
+static const Color CHARRED_COLOR = { 25, 20, 15, 255 };        // Charred black wood
 
 void render_init(void)
 {
@@ -30,12 +36,24 @@ void render_frame(const GameState *state)
             float world_x = x * TERRAIN_SCALE;
             float world_z = z * TERRAIN_SCALE;
 
-            // Height-based color for top surface
+            // Check burn state first
             Color surface_col;
-            if (height >= 8) {
+            TerrainBurnState burn_state = state->terrain_burn[x][z];
+
+            if (burn_state == TERRAIN_BURNING) {
+                // Burning - bright fire color with random variation
+                surface_col = FIRE_COLOR;
+            } else if (burn_state == TERRAIN_BURNED) {
+                // Burned - randomized black/charred color
+                int shade = 20 + (((x * 7) ^ (z * 13)) % 25);
+                surface_col = (Color){ shade, shade - 5, shade - 10, 255 };
+            } else if (height >= 8) {
                 surface_col = ROCK_COLOR;           // Rocky peaks
             } else if (height >= 5) {
                 surface_col = GRASS_HIGH_COLOR;     // Highland grass
+            } else if (height < WATER_LEVEL) {
+                // Underwater terrain - sandy/muddy color
+                surface_col = (Color){ 120, 110, 90, 255 };
             } else {
                 surface_col = GRASS_LOW_COLOR;      // Lowland grass
             }
@@ -43,14 +61,20 @@ void render_frame(const GameState *state)
             // Draw only the top terrain voxel for performance
             Vector3 pos = { world_x, height * TERRAIN_SCALE, world_z };
             DrawCube(pos, TERRAIN_SCALE, TERRAIN_SCALE, TERRAIN_SCALE, surface_col);
-
-            // Draw water if below water level
-            if (height < WATER_LEVEL) {
-                Vector3 water_pos = { world_x, WATER_LEVEL * TERRAIN_SCALE, world_z };
-                DrawCube(water_pos, TERRAIN_SCALE, TERRAIN_SCALE * 0.8f, TERRAIN_SCALE, WATER_COLOR);
-            }
         }
     }
+
+    // Draw water as a single smooth transparent plane
+    float water_y = WATER_LEVEL * TERRAIN_SCALE + 0.3f;
+    float terrain_size = TERRAIN_RESOLUTION * TERRAIN_SCALE;
+    float water_center = terrain_size / 2.0f;
+
+    // Draw water plane with transparency
+    DrawPlane(
+        (Vector3){ water_center, water_y, water_center },
+        (Vector2){ terrain_size, terrain_size },
+        (Color){ 40, 120, 180, 140 }  // Semi-transparent blue
+    );
 
     // Draw all trees
     for (int t = 0; t < state->tree_count; t++) {
@@ -64,6 +88,7 @@ void render_frame(const GameState *state)
         // Draw each voxel
         for (int v = 0; v < tree->voxel_count; v++) {
             const TreeVoxel *voxel = &tree->voxels[v];
+            if (!voxel->active) continue;
 
             Vector3 pos = {
                 base_x + voxel->x * BOX_SIZE,
@@ -71,13 +96,27 @@ void render_frame(const GameState *state)
                 base_z + voxel->z * BOX_SIZE
             };
 
-            // Color based on voxel type
+            // Color based on voxel type and burn state
             Color col;
-            switch (voxel->type) {
-                case VOXEL_TRUNK:  col = TRUNK_COLOR; break;
-                case VOXEL_BRANCH: col = BRANCH_COLOR; break;
-                case VOXEL_LEAF:
-                default:           col = LEAF_COLOR; break;
+            if (voxel->burn_state == VOXEL_BURNED) {
+                // Charred black wood
+                col = CHARRED_COLOR;
+            } else if (voxel->burn_state == VOXEL_BURNING) {
+                if (voxel->type == VOXEL_LEAF) {
+                    // Burning leaves are red/orange
+                    col = BURNING_LEAF_COLOR;
+                } else {
+                    // Burning wood is orange
+                    col = FIRE_COLOR;
+                }
+            } else {
+                // Normal colors
+                switch (voxel->type) {
+                    case VOXEL_TRUNK:  col = TRUNK_COLOR; break;
+                    case VOXEL_BRANCH: col = BRANCH_COLOR; break;
+                    case VOXEL_LEAF:
+                    default:           col = LEAF_COLOR; break;
+                }
             }
 
             DrawCube(pos, BOX_SIZE, BOX_SIZE, BOX_SIZE, col);
@@ -87,14 +126,22 @@ void render_frame(const GameState *state)
     EndMode3D();
 
     // UI
-    DrawRectangle(10, 10, 300, 160, Fade(BLACK, 0.7f));
+    DrawRectangle(10, 10, 310, 195, Fade(BLACK, 0.7f));
     DrawText("Tree Growth Simulator", 20, 15, 20, WHITE);
-    DrawText("Right-click + drag - Look around", 20, 42, 12, LIGHTGRAY);
-    DrawText("WASD - Move, Q/E - Down/Up, Shift - Sprint", 20, 57, 12, LIGHTGRAY);
-    DrawText("Scroll - Zoom, SPACE - Pause, R - Reset", 20, 72, 12, LIGHTGRAY);
 
-    DrawText(TextFormat("Trees: %d", state->tree_count), 20, 95, 14, WHITE);
-    DrawText(state->paused ? "PAUSED" : "GROWING...", 120, 95, 14,
+    // Current tool indicator
+    const char *tool_name = (state->current_tool == TOOL_BURN) ? "BURN" : "TREE";
+    Color tool_color = (state->current_tool == TOOL_BURN) ? ORANGE : GREEN;
+    DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
+
+    DrawText("1 - Burn tool, 2 - Tree tool", 20, 42, 12, LIGHTGRAY);
+    DrawText("Left-click - Use tool", 20, 57, 12, LIGHTGRAY);
+    DrawText("Right-click + drag - Look around", 20, 72, 12, LIGHTGRAY);
+    DrawText("WASD - Move, Q/E - Down/Up, Shift - Sprint", 20, 87, 12, LIGHTGRAY);
+    DrawText("Scroll - Zoom, SPACE - Pause, R - Reset", 20, 102, 12, LIGHTGRAY);
+
+    DrawText(TextFormat("Trees: %d", state->tree_count), 20, 125, 14, WHITE);
+    DrawText(state->paused ? "PAUSED" : "GROWING...", 120, 125, 14,
              state->paused ? YELLOW : GREEN);
 
     // Use cached counts
@@ -106,10 +153,10 @@ void render_frame(const GameState *state)
         branch_count += state->trees[t].branch_count_cached;
         leaf_count += state->trees[t].leaf_count;
     }
-    DrawText(TextFormat("Voxels: %d (trees:%d)", total_voxels, state->tree_count), 20, 115, 14,
+    DrawText(TextFormat("Voxels: %d (trees:%d)", total_voxels, state->tree_count), 20, 145, 14,
              total_voxels > 0 ? WHITE : RED);
     DrawText(TextFormat("Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
-             20, 135, 11, LIGHTGRAY);
+             20, 165, 11, LIGHTGRAY);
 
     // Legend
     DrawRectangle(SCREEN_WIDTH - 200, 10, 190, 80, Fade(BLACK, 0.7f));

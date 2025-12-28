@@ -8,8 +8,8 @@ int main(void)
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Grid Viewer");
     SetTargetFPS(60);
 
-    // Initialize game state (static to avoid stack overflow - struct is ~4MB)
-    static GameState state;
+    // Initialize game state (static for zero-init, trees allocated dynamically)
+    static GameState state = {0};
     game_init(&state);
 
     // Initialize rendering

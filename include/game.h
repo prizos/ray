@@ -18,7 +18,7 @@
 #define WATER_LEVEL 3           // Height below which water appears
 
 // Tree settings
-#define MAX_TREES 12
+#define MAX_TREES 100
 #define MAX_TREE_HEIGHT 120
 #define MAX_VOXELS_PER_TREE 12000
 #define MAX_TIPS_PER_TREE 200
@@ -28,6 +28,23 @@
 #define VOXEL_HASH_SIZE 16007
 
 #define GROWTH_INTERVAL 0.05f  // Very fast growth
+#define BURN_SPREAD_INTERVAL 0.08f  // Fire spread speed
+#define BURN_DURATION 0.5f     // Time for burning stage
+#define REGEN_INTERVAL 0.15f   // Tree regeneration speed
+#define TREE_REGEN_RADIUS 8    // How far trees regenerate terrain
+
+// Tool types
+typedef enum {
+    TOOL_TREE,
+    TOOL_BURN
+} ToolType;
+
+// Terrain burn state
+typedef enum {
+    TERRAIN_NORMAL,
+    TERRAIN_BURNING,
+    TERRAIN_BURNED
+} TerrainBurnState;
 
 // Tree algorithm types
 typedef enum {
@@ -43,10 +60,19 @@ typedef enum {
     VOXEL_LEAF
 } VoxelType;
 
+// Voxel burn state
+typedef enum {
+    VOXEL_NORMAL,
+    VOXEL_BURNING,    // Leaves turn red
+    VOXEL_BURNED      // Trunk/branch turn black, leaves removed
+} VoxelBurnState;
+
 // A single voxel in a tree
 typedef struct {
     int x, y, z;       // Position relative to tree base
     VoxelType type;    // Trunk, branch, or leaf
+    VoxelBurnState burn_state;
+    float burn_timer;  // Time until next burn stage
     bool active;
 } TreeVoxel;
 
@@ -110,15 +136,29 @@ typedef struct GameState {
     float camera_pitch;    // Vertical angle (radians)
     bool running;
 
+    // Current tool
+    ToolType current_tool;
+
     // Terrain height map
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
 
-    // Trees
-    Tree trees[MAX_TREES];
+    // Terrain burn state
+    TerrainBurnState terrain_burn[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
+    float terrain_burn_timer[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
+
+    // Trees (dynamically allocated)
+    Tree *trees;
     int tree_count;
 
     // Growth timing
     float growth_timer;
+
+    // Burn spread timing
+    float burn_timer;
+
+    // Regeneration timing
+    float regen_timer;
+
     bool paused;
 } GameState;
 
