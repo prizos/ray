@@ -22,6 +22,9 @@ static const Color LEAF_COLOR = { 50, 180, 70, 255 };
 static const Color BURNING_LEAF_COLOR = { 255, 60, 20, 255 };
 static const Color CHARRED_COLOR = { 25, 20, 15, 255 };
 
+// Creature colors
+static const Color BEAVER_COLOR = { 139, 90, 43, 255 };  // Brown beaver
+
 // ============ INSTANCING DATA ============
 
 // Color groups for batching
@@ -38,6 +41,7 @@ typedef enum {
     GROUP_TERRAIN_UNDERWATER,
     GROUP_TERRAIN_FIRE,
     GROUP_TERRAIN_BURNED,
+    GROUP_BEAVER,
     GROUP_COUNT
 } ColorGroup;
 
@@ -107,7 +111,8 @@ void render_init(void)
         ROCK_COLOR,
         UNDERWATER_COLOR,
         FIRE_COLOR,
-        { 25, 20, 15, 255 }  // Burned terrain
+        { 25, 20, 15, 255 },  // Burned terrain
+        BEAVER_COLOR
     };
 
     for (int i = 0; i < GROUP_COUNT; i++) {
@@ -212,6 +217,14 @@ void render_frame(const GameState *state)
         }
     }
 
+    // ========== COLLECT BEAVER INSTANCES ==========
+    for (int b = 0; b < MAX_BEAVERS; b++) {
+        const Beaver *beaver = &state->beavers[b];
+        if (!beaver->active) continue;
+
+        add_instance(GROUP_BEAVER, beaver->x, beaver->y, beaver->z, BEAVER_SIZE);
+    }
+
     // ========== DRAW ==========
     BeginDrawing();
     ClearBackground(SKY_COLOR);
@@ -262,7 +275,8 @@ void render_frame(const GameState *state)
     DrawText("Scroll - Zoom, SPACE - Pause, R - Reset", 20, 102, 12, LIGHTGRAY);
 
     DrawText(TextFormat("Trees: %d", state->tree_count), 20, 125, 14, WHITE);
-    DrawText(state->paused ? "PAUSED" : "GROWING...", 120, 125, 14,
+    DrawText(TextFormat("Beavers: %d", state->beaver_count), 100, 125, 14, BEAVER_COLOR);
+    DrawText(state->paused ? "PAUSED" : "GROWING...", 190, 125, 14,
              state->paused ? YELLOW : GREEN);
 
     // Voxel counts

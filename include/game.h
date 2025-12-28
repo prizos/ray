@@ -4,6 +4,7 @@
 #include "raylib.h"
 #include "tree.h"
 #include "terrain.h"
+#include "beaver.h"
 
 // ============ DISPLAY CONSTANTS ============
 
@@ -48,6 +49,10 @@ typedef struct GameState {
     // Trees (dynamically allocated)
     Tree *trees;
     int tree_count;
+
+    // Beavers
+    Beaver beavers[MAX_BEAVERS];
+    int beaver_count;
 
     // Timers
     float growth_timer;

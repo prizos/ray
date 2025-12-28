@@ -40,6 +40,9 @@ static void game_init_common(GameState *state)
     terrain_generate(state->terrain_height);
     terrain_burn_init(state->terrain_burn, state->terrain_burn_timer);
 
+    // Initialize beavers
+    beaver_init_all(state->beavers, &state->beaver_count);
+
     // Allocate trees
     if (state->trees == NULL) {
         state->trees = (Tree *)malloc(sizeof(Tree) * MAX_TREES);
@@ -252,6 +255,11 @@ void game_update(GameState *state)
         state->regen_timer = 0;
         terrain_regenerate(state->terrain_burn, state->trees, state->tree_count);
     }
+
+    // ========== BEAVER UPDATE ==========
+    beaver_update(state->beavers, &state->beaver_count,
+                  state->trees, state->tree_count,
+                  state->terrain_height, delta);
 
     // ========== TREE GROWTH ==========
     if (!state->paused) {
