@@ -22,10 +22,13 @@ static const Color LEAF_COLOR = { 50, 180, 70, 255 };
 static const Color BURNING_LEAF_COLOR = { 255, 60, 20, 255 };
 static const Color CHARRED_COLOR = { 25, 20, 15, 255 };
 
-// Creature colors
-static const Color BEAVER_BODY_COLOR = { 139, 90, 43, 255 };   // Brown body
-static const Color BEAVER_TAIL_COLOR = { 60, 40, 25, 255 };    // Dark brown tail
-static const Color BEAVER_NOSE_COLOR = { 30, 20, 15, 255 };    // Black nose
+// Creature colors - Beaver
+static const Color BEAVER_BODY_COLOR = { 130, 82, 45, 255 };   // Warm brown fur
+static const Color BEAVER_BELLY_COLOR = { 160, 120, 80, 255 }; // Lighter tan belly
+static const Color BEAVER_TAIL_COLOR = { 55, 50, 48, 255 };    // Dark gray scaly tail
+static const Color BEAVER_NOSE_COLOR = { 25, 20, 18, 255 };    // Black nose
+static const Color BEAVER_TEETH_COLOR = { 255, 245, 220, 255 };// Cream white teeth
+static const Color BEAVER_EYE_COLOR = { 15, 12, 10, 255 };     // Dark eyes
 
 // ============ INSTANCING DATA ============
 
@@ -44,8 +47,11 @@ typedef enum {
     GROUP_TERRAIN_FIRE,
     GROUP_TERRAIN_BURNED,
     GROUP_BEAVER_BODY,
+    GROUP_BEAVER_BELLY,
     GROUP_BEAVER_TAIL,
     GROUP_BEAVER_NOSE,
+    GROUP_BEAVER_TEETH,
+    GROUP_BEAVER_EYE,
     GROUP_COUNT
 } ColorGroup;
 
@@ -117,8 +123,11 @@ void render_init(void)
         FIRE_COLOR,
         { 25, 20, 15, 255 },  // Burned terrain
         BEAVER_BODY_COLOR,
+        BEAVER_BELLY_COLOR,
         BEAVER_TAIL_COLOR,
-        BEAVER_NOSE_COLOR
+        BEAVER_NOSE_COLOR,
+        BEAVER_TEETH_COLOR,
+        BEAVER_EYE_COLOR
     };
 
     for (int i = 0; i < GROUP_COUNT; i++) {
@@ -261,54 +270,106 @@ void render_frame(const GameState *state)
         float right_x = cosf(angle);
         float right_z = -sinf(angle);
 
-        // Body (elongated, main mass) - 2.0 x 1.0 x 1.2
-        add_instance_rotated(GROUP_BEAVER_BODY, bx, by, bz, 2.0f, 1.0f, 1.2f, angle);
+        // === BODY ===
+        // Main body (chunky, rounded look)
+        add_instance_rotated(GROUP_BEAVER_BODY, bx, by, bz, 1.8f, 1.1f, 1.3f, angle);
+        // Belly (lighter underside, slightly lower)
+        add_instance_rotated(GROUP_BEAVER_BELLY, bx, by - 0.35f, bz, 1.4f, 0.5f, 1.0f, angle);
+        // Rump (back is fatter)
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            bx - fwd_x * 0.6f, by + 0.1f, bz - fwd_z * 0.6f,
+            1.0f, 1.0f, 1.2f, angle);
 
-        // Head (front, smaller) - 0.8 cube, offset forward
-        float head_x = bx + fwd_x * 1.2f;
-        float head_y = by + 0.2f;
-        float head_z = bz + fwd_z * 1.2f;
-        add_instance_rotated(GROUP_BEAVER_BODY, head_x, head_y, head_z, 0.8f, 0.8f, 0.8f, angle);
+        // === HEAD ===
+        float head_x = bx + fwd_x * 1.1f;
+        float head_y = by + 0.15f;
+        float head_z = bz + fwd_z * 1.1f;
+        add_instance_rotated(GROUP_BEAVER_BODY, head_x, head_y, head_z, 0.9f, 0.85f, 0.9f, angle);
 
-        // Nose (front of head) - small black cube
-        float nose_x = head_x + fwd_x * 0.5f;
-        float nose_y = head_y - 0.1f;
-        float nose_z = head_z + fwd_z * 0.5f;
-        add_instance_rotated(GROUP_BEAVER_NOSE, nose_x, nose_y, nose_z, 0.25f, 0.2f, 0.3f, angle);
+        // Snout/muzzle (protruding)
+        float snout_x = head_x + fwd_x * 0.5f;
+        float snout_y = head_y - 0.15f;
+        float snout_z = head_z + fwd_z * 0.5f;
+        add_instance_rotated(GROUP_BEAVER_BODY, snout_x, snout_y, snout_z, 0.5f, 0.4f, 0.5f, angle);
 
-        // Tail (back, flat paddle) - 1.4 x 0.15 x 0.7
-        float tail_x = bx - fwd_x * 1.6f;
-        float tail_y = by - 0.3f;
-        float tail_z = bz - fwd_z * 1.6f;
-        add_instance_rotated(GROUP_BEAVER_TAIL, tail_x, tail_y, tail_z, 1.4f, 0.15f, 0.7f, angle);
+        // Nose (black, on snout)
+        add_instance_rotated(GROUP_BEAVER_NOSE,
+            snout_x + fwd_x * 0.3f, snout_y + 0.05f, snout_z + fwd_z * 0.3f,
+            0.2f, 0.15f, 0.25f, angle);
 
-        // Four legs (small cubes under body corners)
-        float leg_h = 0.4f;
-        float leg_w = 0.3f;
-        float leg_y = by - 0.6f;
-        float leg_fwd = 0.6f;   // Forward offset
-        float leg_side = 0.45f; // Side offset
+        // === BUCK TEETH (iconic!) ===
+        float teeth_y = snout_y - 0.2f;
+        // Left tooth
+        add_instance_rotated(GROUP_BEAVER_TEETH,
+            snout_x + fwd_x * 0.2f - right_x * 0.08f, teeth_y,
+            snout_z + fwd_z * 0.2f - right_z * 0.08f,
+            0.12f, 0.25f, 0.08f, angle);
+        // Right tooth
+        add_instance_rotated(GROUP_BEAVER_TEETH,
+            snout_x + fwd_x * 0.2f + right_x * 0.08f, teeth_y,
+            snout_z + fwd_z * 0.2f + right_z * 0.08f,
+            0.12f, 0.25f, 0.08f, angle);
 
-        // Front-left leg
+        // === EYES ===
+        float eye_y = head_y + 0.2f;
+        float eye_fwd = 0.35f;
+        float eye_side = 0.3f;
+        // Left eye
+        add_instance_rotated(GROUP_BEAVER_EYE,
+            head_x + fwd_x * eye_fwd - right_x * eye_side, eye_y,
+            head_z + fwd_z * eye_fwd - right_z * eye_side,
+            0.12f, 0.12f, 0.12f, angle);
+        // Right eye
+        add_instance_rotated(GROUP_BEAVER_EYE,
+            head_x + fwd_x * eye_fwd + right_x * eye_side, eye_y,
+            head_z + fwd_z * eye_fwd + right_z * eye_side,
+            0.12f, 0.12f, 0.12f, angle);
+
+        // === EARS (small rounded) ===
+        float ear_y = head_y + 0.4f;
+        float ear_side = 0.35f;
+        // Left ear
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            head_x - right_x * ear_side, ear_y, head_z - right_z * ear_side,
+            0.2f, 0.25f, 0.15f, angle);
+        // Right ear
+        add_instance_rotated(GROUP_BEAVER_BODY,
+            head_x + right_x * ear_side, ear_y, head_z + right_z * ear_side,
+            0.2f, 0.25f, 0.15f, angle);
+
+        // === TAIL (flat paddle, iconic beaver tail) ===
+        float tail_x = bx - fwd_x * 1.8f;
+        float tail_y = by - 0.2f;
+        float tail_z = bz - fwd_z * 1.8f;
+        add_instance_rotated(GROUP_BEAVER_TAIL, tail_x, tail_y, tail_z, 1.6f, 0.18f, 0.9f, angle);
+
+        // === LEGS (stubby) ===
+        float leg_h = 0.5f;
+        float leg_w = 0.35f;
+        float leg_y = by - 0.7f;
+        float leg_fwd = 0.5f;
+        float leg_side = 0.4f;
+
+        // Front-left
         add_instance_rotated(GROUP_BEAVER_BODY,
             bx + fwd_x * leg_fwd - right_x * leg_side, leg_y,
             bz + fwd_z * leg_fwd - right_z * leg_side,
             leg_w, leg_h, leg_w, angle);
-        // Front-right leg
+        // Front-right
         add_instance_rotated(GROUP_BEAVER_BODY,
             bx + fwd_x * leg_fwd + right_x * leg_side, leg_y,
             bz + fwd_z * leg_fwd + right_z * leg_side,
             leg_w, leg_h, leg_w, angle);
-        // Back-left leg
+        // Back-left (bigger, beaver has big back feet)
         add_instance_rotated(GROUP_BEAVER_BODY,
             bx - fwd_x * leg_fwd - right_x * leg_side, leg_y,
             bz - fwd_z * leg_fwd - right_z * leg_side,
-            leg_w, leg_h, leg_w, angle);
-        // Back-right leg
+            leg_w * 1.2f, leg_h, leg_w * 1.3f, angle);
+        // Back-right
         add_instance_rotated(GROUP_BEAVER_BODY,
             bx - fwd_x * leg_fwd + right_x * leg_side, leg_y,
             bz - fwd_z * leg_fwd + right_z * leg_side,
-            leg_w, leg_h, leg_w, angle);
+            leg_w * 1.2f, leg_h, leg_w * 1.3f, angle);
     }
 
     // ========== DRAW ==========

@@ -162,7 +162,9 @@ void beaver_update(Beaver *beavers, int *beaver_count,
         if (tx >= TERRAIN_RESOLUTION) tx = TERRAIN_RESOLUTION - 1;
         if (tz < 0) tz = 0;
         if (tz >= TERRAIN_RESOLUTION) tz = TERRAIN_RESOLUTION - 1;
-        beaver->y = terrain_height[tx][tz] * TERRAIN_SCALE + BEAVER_SIZE * 0.5f;
+        // Position beaver on top of terrain (terrain top = height * SCALE + SCALE/2)
+        // Beaver legs bottom should be at terrain top, legs are at by-0.8
+        beaver->y = terrain_height[tx][tz] * TERRAIN_SCALE + TERRAIN_SCALE * 0.5f + 1.0f;
 
         switch (beaver->state) {
             case BEAVER_SPAWNING:
