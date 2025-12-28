@@ -1,4 +1,5 @@
 #include "tree.h"
+#include "attractor_octree.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -245,6 +246,13 @@ static void init_space_colonization(Tree *tree) {
             }
         }
     }
+
+    // Create attractor octree for fast spatial queries
+    OctreeBounds attractor_bounds = {
+        -SC_CROWN_SPREAD_MAX - 5, 0, -SC_CROWN_SPREAD_MAX - 5,
+        SC_CROWN_SPREAD_MAX + 5, SC_CROWN_HEIGHT_MAX + 20, SC_CROWN_SPREAD_MAX + 5
+    };
+    tree->attractor_octree = attractor_octree_create(tree->attractors, tree->attractor_count, attractor_bounds);
 }
 
 static void grow_space_colonization(Tree *tree) {
@@ -265,11 +273,18 @@ static void grow_space_colonization(Tree *tree) {
             continue;
         }
 
+        // Use octree for efficient attractor queries
+        AttractorOctree *ao = (AttractorOctree *)tree->attractor_octree;
         float closest_dist = 9999.0f;
         int closest_idx = -1;
         float closest_dx = 0, closest_dy = 0, closest_dz = 0;
 
-        for (int a = 0; a < tree->attractor_count; a++) {
+        // Query attractors within influence radius using octree
+        OctreeQueryResult *nearby = octree_result_create(64);
+        attractor_octree_query_influence(ao, tip->x, tip->y, tip->z, SC_INFLUENCE_RADIUS, nearby);
+
+        for (int i = 0; i < nearby->count; i++) {
+            int a = nearby->indices[i];
             Attractor *attr = &tree->attractors[a];
             if (!attr->active) continue;
 
@@ -279,7 +294,7 @@ static void grow_space_colonization(Tree *tree) {
             float dist = sqrtf(dx*dx + dy*dy + dz*dz);
 
             if (dist < SC_KILL_RADIUS) {
-                attr->active = false;
+                attractor_octree_deactivate(ao, a);
                 if (tip->generation > 0) {
                     tree_add_voxel(tree, (int)tip->x, (int)tip->y + 1, (int)tip->z, VOXEL_LEAF);
                     if (randf() < 0.5f) {
@@ -289,7 +304,7 @@ static void grow_space_colonization(Tree *tree) {
                         tree_add_voxel(tree, (int)tip->x, (int)tip->y, (int)tip->z - 1, VOXEL_LEAF);
                     }
                 }
-            } else if (dist < SC_INFLUENCE_RADIUS && dist < closest_dist) {
+            } else if (dist < closest_dist) {
                 closest_dist = dist;
                 closest_idx = a;
                 closest_dx = dx;
@@ -297,6 +312,7 @@ static void grow_space_colonization(Tree *tree) {
                 closest_dz = dz;
             }
         }
+        octree_result_destroy(nearby);
 
         if (closest_idx >= 0) {
             float len = sqrtf(closest_dx*closest_dx + closest_dy*closest_dy + closest_dz*closest_dz);
@@ -524,6 +540,7 @@ void tree_init(Tree *tree, int base_x, int base_y, int base_z, TreeAlgorithm alg
     tree->attractor_count = 0;
     tree->sc_branch_count = 0;
     tree->tip_count = 0;
+    tree->attractor_octree = NULL;
 
     tree_hash_clear(tree);
 

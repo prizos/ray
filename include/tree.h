@@ -128,6 +128,7 @@ typedef struct {
     int attractor_count;
     GrowthTip sc_branches[MAX_TIPS_PER_TREE];
     int sc_branch_count;
+    void *attractor_octree;  // AttractorOctree* (forward declared to avoid circular include)
 
     // Agent-based state
     GrowthTip tips[MAX_TIPS_PER_TREE];
