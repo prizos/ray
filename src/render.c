@@ -561,10 +561,10 @@ void render_frame(const GameState *state)
         EndMode3D();
     }
 
-    // ========== UI ==========
-    DrawRectangle(10, 10, 310, 195, Fade(BLACK, 0.7f));
-    DrawText("Tree Growth Simulator", 20, 15, 20, WHITE);
+    // ========== UI: TOP-LEFT PANEL ==========
+    DrawRectangle(10, 10, 200, 85, Fade(BLACK, 0.7f));
 
+    // Tool name and color
     const char *tool_name = "TREE";
     Color tool_color = GREEN;
     if (state->current_tool == TOOL_HEAT) {
@@ -572,75 +572,48 @@ void render_frame(const GameState *state)
         tool_color = ORANGE;
     } else if (state->current_tool == TOOL_COOL) {
         tool_name = "COOL";
-        tool_color = (Color){ 100, 180, 255, 255 };  // Light blue
+        tool_color = (Color){ 100, 180, 255, 255 };
     } else if (state->current_tool == TOOL_WATER) {
         tool_name = "WATER";
         tool_color = (Color){ 80, 170, 220, 255 };
     }
 
-    // Show temperature for heat/cool tools
+    // Tool display with temperature for heat/cool
     if ((state->current_tool == TOOL_HEAT || state->current_tool == TOOL_COOL) && state->target_valid) {
         float temp = state->target_temperature;
-        Color temp_color = temp > 100 ? RED : (temp < 0 ? SKYBLUE : WHITE);
-        DrawText(TextFormat("%s %.0fC", tool_name, temp), 200, 17, 16, temp_color);
+        Color temp_color = temp > 100 ? RED : (temp < 0 ? SKYBLUE : tool_color);
+        DrawText(TextFormat("%s: %.0fC", tool_name, temp), 20, 18, 20, temp_color);
     } else {
-        DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
+        DrawText(tool_name, 20, 18, 20, tool_color);
     }
 
-    DrawText("1-Heat 2-Cool 3-Tree 4-Water", 20, 42, 12, LIGHTGRAY);
-    DrawText("Left-click - Use tool", 20, 57, 12, LIGHTGRAY);
-    DrawText("Right-click + drag - Look around", 20, 72, 12, LIGHTGRAY);
-    DrawText("WASD - Move, Q/E - Down/Up, Shift - Sprint", 20, 87, 12, LIGHTGRAY);
-    DrawText("Scroll - Zoom, SPACE - Pause, R - Reset", 20, 102, 12, LIGHTGRAY);
+    // Pause indicator
+    if (state->paused) {
+        DrawText("PAUSED", 130, 22, 14, YELLOW);
+    }
 
-    DrawText(TextFormat("Trees: %d", state->tree_count), 20, 125, 14, WHITE);
-    DrawText(TextFormat("Beavers: %d", state->beaver_count), 100, 125, 14, BEAVER_BODY_COLOR);
-    DrawText(state->paused ? "PAUSED" : "GROWING...", 190, 125, 14,
-             state->paused ? YELLOW : GREEN);
+    // Key bindings (compact)
+    DrawText("1-Heat 2-Cool 3-Tree 4-Water", 20, 45, 10, LIGHTGRAY);
+    DrawText("LMB-Use  RMB-Look  WASD-Move", 20, 58, 10, LIGHTGRAY);
+    DrawText("Q/E-Up/Down  Space-Pause  R-Reset", 20, 71, 10, LIGHTGRAY);
 
-    // Voxel counts
+    // ========== UI: BOTTOM-LEFT STATS ==========
+    DrawRectangle(10, SCREEN_HEIGHT - 55, 180, 45, Fade(BLACK, 0.7f));
+
+    // Counts
     int total_voxels = 0;
-    int trunk_count = 0, branch_count = 0, leaf_count = 0;
     for (int t = 0; t < state->tree_count; t++) {
         total_voxels += state->trees[t].voxel_count;
-        trunk_count += state->trees[t].trunk_count;
-        branch_count += state->trees[t].branch_count;
-        leaf_count += state->trees[t].leaf_count;
     }
-    DrawText(TextFormat("Voxels: %d", total_voxels), 20, 145, 14,
-             total_voxels > 0 ? WHITE : RED);
-    DrawText(TextFormat("Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
-             20, 165, 11, LIGHTGRAY);
-
-    // Water info
-    int water_cells = instanceCounts[GROUP_WATER_SHALLOW] + instanceCounts[GROUP_WATER_DEEP];
     float total_water = FIXED_TO_FLOAT(water_calculate_total(&state->water));
-    DrawText(TextFormat("Water: %.1f units (%d cells)", total_water, water_cells),
-             20, 180, 11, (Color){ 80, 170, 220, 255 });
 
-    // Rendering info
-    int total_instances = 0;
-    for (int i = 0; i < GROUP_COUNT; i++) total_instances += instanceCounts[i];
-    DrawText(TextFormat("%s: %d instances",
-             useInstancing ? "Instanced" : "Fallback",
-             total_instances),
-             200, 180, 10, useInstancing ? GREEN : ORANGE);
+    DrawText(TextFormat("Trees: %d  Voxels: %d", state->tree_count, total_voxels),
+             20, SCREEN_HEIGHT - 48, 12, WHITE);
+    DrawText(TextFormat("Water: %.0f  Beavers: %d", total_water, state->beaver_count),
+             20, SCREEN_HEIGHT - 32, 12, (Color){ 80, 170, 220, 255 });
 
-    // Legend
-    DrawRectangle(SCREEN_WIDTH - 200, 10, 190, 80, Fade(BLACK, 0.7f));
-    DrawText("Space Colonization", SCREEN_WIDTH - 190, 15, 14, WHITE);
-
-    DrawText("Parts:", SCREEN_WIDTH - 190, 38, 12, WHITE);
-    DrawRectangle(SCREEN_WIDTH - 190, 55, 10, 10, TRUNK_COLOR);
-    DrawText("Trunk", SCREEN_WIDTH - 175, 53, 10, LIGHTGRAY);
-    DrawRectangle(SCREEN_WIDTH - 130, 55, 10, 10, BRANCH_COLOR);
-    DrawText("Branch", SCREEN_WIDTH - 115, 53, 10, LIGHTGRAY);
-    DrawRectangle(SCREEN_WIDTH - 65, 55, 10, 10, LEAF_COLOR);
-    DrawText("Leaf", SCREEN_WIDTH - 50, 53, 10, LIGHTGRAY);
-
-    DrawText(TextFormat("Max: %dk voxels/tree", MAX_VOXELS_PER_TREE / 1000), SCREEN_WIDTH - 190, 70, 10, GRAY);
-
-    DrawFPS(SCREEN_WIDTH - 100, SCREEN_HEIGHT - 25);
+    // FPS
+    DrawText(TextFormat("%d FPS", GetFPS()), 20, SCREEN_HEIGHT - 16, 12, GREEN);
 
     EndDrawing();
 }
