@@ -173,10 +173,41 @@ test-water-matter: test-water-matter-unit test-water-matter-integration
 	@echo ""
 	@echo "All water-matter tests passed!"
 
+# ============ CONSERVATION LAW TESTS ============
+# Tests for mass and energy conservation
+
+# Conservation tests (includes matter.c and noise.c directly)
+$(BUILD_DIR)/test_conservation: $(TEST_DIR)/test_conservation.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+
+test-conservation: $(BUILD_DIR)/test_conservation
+	./$(BUILD_DIR)/test_conservation
+
 # Run ALL thermodynamics tests
 test-thermo: test-matter test-water-matter
 	@echo ""
 	@echo "All thermodynamics tests passed!"
+
+# ============ FLOW BEHAVIOR TESTS ============
+# Tests for matter/water flow physics
+
+$(BUILD_DIR)/test_flow_behavior: $(TEST_DIR)/test_flow_behavior.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+
+test-flow: $(BUILD_DIR)/test_flow_behavior
+	./$(BUILD_DIR)/test_flow_behavior
+
+# ============ PHASE TRANSITION TESTS ============
+$(BUILD_DIR)/test_phase_transitions: $(TEST_DIR)/test_phase_transitions.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+
+test-phase: $(BUILD_DIR)/test_phase_transitions
+	./$(BUILD_DIR)/test_phase_transitions
+
+# ============ ALL PHYSICS TESTS ============
+test-physics: test-conservation test-flow test-phase
+	@echo ""
+	@echo "All physics tests passed!"
 
 # Clean (removes build dir with all .o and .d files)
 clean:
@@ -214,4 +245,4 @@ tune-dry-run: $(TUNE_TARGET)
 tune-clean:
 	rm -rf terrain_output $(TUNE_TARGET)
 
-.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-water-matter test-water-matter-unit test-water-matter-integration test-thermo tune-terrain tune-init tune-single tune-dry-run tune-clean
+.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-water-matter test-water-matter-unit test-water-matter-integration test-thermo test-conservation test-flow test-phase test-physics tune-terrain tune-init tune-single tune-dry-run tune-clean
