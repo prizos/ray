@@ -555,16 +555,8 @@ void test_gas_spreads_uniformly(void) {
         }
     }
 
-    // NOTE: matter_step does NOT call matter_diffuse_gases!
-    // This is a missing feature - call it directly for testing
-    for (int i = 0; i < 500; i++) {
-        matter_diffuse_gases(&state);
-        for (int x = 0; x < MATTER_RES; x++) {
-            for (int z = 0; z < MATTER_RES; z++) {
-                cell_update_cache(&state.cells[x][z]);
-            }
-        }
-    }
+    // Run simulation (matter_step now calls matter_diffuse_gases)
+    run_matter_steps(&state, 500);
 
     fixed16_t center_after = 0;
     for (int x = 78; x < 82; x++) {

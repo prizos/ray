@@ -672,15 +672,19 @@ void matter_process_combustion(MatterState *state) {
             if (actual_burn <= 0) continue;
 
             // Consume reactants
+            // Stoichiometry: 1 kg cellulose + 0.33 kg O2 = 1.33 kg total reactants
             cell->cellulose_solid -= actual_burn;
-            CELL_O2_GAS(cell) -= fixed_mul(actual_burn, FLOAT_TO_FIXED(0.33f));
+            fixed16_t o2_consumed = fixed_mul(actual_burn, FLOAT_TO_FIXED(0.33f));
+            CELL_O2_GAS(cell) -= o2_consumed;
 
-            // Produce products
-            // C6H10O5 + 6O2 → 6CO2 + 5H2O (simplified ratios)
-            cell->co2_gas += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.8f));
-            CELL_H2O_STEAM(cell) += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.1f));  // Steam from combustion
-            cell->ash_solid += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.03f));
-            cell->smoke_gas += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.07f));
+            // Produce products - MUST sum to 1.33 kg to conserve mass
+            // C6H10O5 + 6O2 → 6CO2 + 5H2O (simplified, mass-conserving ratios)
+            // Total products = cellulose + O2 = 1.0 + 0.33 = 1.33
+            cell->co2_gas += fixed_mul(actual_burn, FLOAT_TO_FIXED(1.1f));     // Main product
+            CELL_H2O_STEAM(cell) += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.13f));  // Steam from combustion
+            cell->ash_solid += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.05f));   // Mineral residue
+            cell->smoke_gas += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.05f));   // Particulates
+            // Total: 1.1 + 0.13 + 0.05 + 0.05 = 1.33 (mass conserved)
 
             // Release heat
             fixed16_t heat = fixed_mul(actual_burn,
@@ -915,6 +919,9 @@ void matter_step(MatterState *state) {
 
     // Flow liquids (water flows fast, lava flows slow with viscosity)
     matter_flow_liquids(state);
+
+    // Diffuse gases (CO2, smoke, steam spread out)
+    matter_diffuse_gases(state);
 
     // Note: No atmospheric replenishment - hermetic simulation
     // Gases are conserved; O2 consumed by fire is not replaced
