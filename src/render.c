@@ -439,28 +439,39 @@ void render_frame(const GameState *state)
             leg_w * 1.2f, leg_h, leg_w * 1.3f, angle);
     }
 
-    // ========== COLLECT WATER INSTANCES (SMOOTHED) ==========
-    // Water is rendered with interpolated heights for a smoother, flowing appearance
+    // ========== COLLECT WATER INSTANCES (SMOOTH SURFACE) ==========
+    // Render water as a continuous sloping surface by interpolating surface heights
     if (state->matter.initialized) {
         const float DEPTH_THRESHOLD = 0.05f;  // Minimum depth to render
-        const float DEEP_THRESHOLD = 2.0f;    // Depth at which water is "deep"
-        const int SUBDIVISIONS = 2;           // Subdivide each cell into NxN quads
+        const float DEEP_THRESHOLD = 2.0f;    // Depth for deep water color
+        const float SURFACE_THICKNESS = 0.4f; // Thin slab thickness for surface
+        const int SUBDIVISIONS = 3;           // Higher subdivision for smoother surface
         const float SUB_SIZE = TERRAIN_SCALE / SUBDIVISIONS;
 
-        // Wave animation parameters
+        // Wave animation
         float wave_time = state->matter.tick * 0.05f;
-        const float WAVE_HEIGHT = 0.15f;      // Wave amplitude
-        const float WAVE_FREQ = 0.3f;         // Spatial frequency
+        const float WAVE_HEIGHT = 0.12f;
+        const float WAVE_FREQ = 0.25f;
 
-        // Helper: get water depth at cell with bounds checking
+        // Helper: get water SURFACE height at cell (terrain + water depth)
+        // Returns -1000 if no water (used as sentinel)
+        #define GET_SURFACE(cx, cz) ({ \
+            float _surf = -1000.0f; \
+            if ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) { \
+                const MatterCell *_c = &state->matter.cells[cx][cz]; \
+                float _d = FIXED_TO_FLOAT(CELL_H2O_LIQUID(_c)); \
+                if (_d >= DEPTH_THRESHOLD * 0.3f) { \
+                    float _t = _c->terrain_height * TERRAIN_SCALE + TERRAIN_SCALE * 0.5f; \
+                    _surf = _t + _d * TERRAIN_SCALE; \
+                } \
+            } \
+            _surf; \
+        })
+
+        // Helper: get depth at cell
         #define GET_DEPTH(cx, cz) ( \
             ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) \
             ? FIXED_TO_FLOAT(CELL_H2O_LIQUID(&state->matter.cells[cx][cz])) : 0.0f)
-
-        // Helper: get terrain top at cell
-        #define GET_TERRAIN_TOP(cx, cz) ( \
-            ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) \
-            ? (state->matter.cells[cx][cz].terrain_height * TERRAIN_SCALE + TERRAIN_SCALE * 0.5f) : 0.0f)
 
         for (int x = 0; x < MATTER_RES; x++) {
             for (int z = 0; z < MATTER_RES; z++) {
@@ -468,74 +479,81 @@ void render_frame(const GameState *state)
                 float depth = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
                 if (depth < DEPTH_THRESHOLD) continue;
 
-                // Get depths from this cell and neighbors for interpolation
+                // Get water surface heights at cell corners (for bilinear interp)
+                // Use this cell's surface for corners where neighbors have no water
+                float this_surface = cell->terrain_height * TERRAIN_SCALE +
+                                     TERRAIN_SCALE * 0.5f + depth * TERRAIN_SCALE;
+
+                float s00 = GET_SURFACE(x, z);
+                float s10 = GET_SURFACE(x + 1, z);
+                float s01 = GET_SURFACE(x, z + 1);
+                float s11 = GET_SURFACE(x + 1, z + 1);
+
+                // For neighbors without water, blend toward this cell's surface
+                // to create smooth edges rather than hard cutoffs
+                if (s00 < -500) s00 = this_surface;
+                if (s10 < -500) s10 = this_surface * 0.7f + s00 * 0.3f;
+                if (s01 < -500) s01 = this_surface * 0.7f + s00 * 0.3f;
+                if (s11 < -500) s11 = (s10 + s01) * 0.5f;
+
+                // Get depths for color selection
                 float d00 = depth;
                 float d10 = GET_DEPTH(x + 1, z);
                 float d01 = GET_DEPTH(x, z + 1);
                 float d11 = GET_DEPTH(x + 1, z + 1);
 
-                // Get terrain tops
-                float t00 = GET_TERRAIN_TOP(x, z);
-                float t10 = GET_TERRAIN_TOP(x + 1, z);
-                float t01 = GET_TERRAIN_TOP(x, z + 1);
-                float t11 = GET_TERRAIN_TOP(x + 1, z + 1);
-
-                // Base world position (corner of cell)
+                // Base world position (cell corner)
                 float base_x = x * TERRAIN_SCALE - TERRAIN_SCALE * 0.5f;
                 float base_z = z * TERRAIN_SCALE - TERRAIN_SCALE * 0.5f;
 
-                // Render subdivided quads with interpolated heights
+                // Render subdivided surface quads
                 for (int sx = 0; sx < SUBDIVISIONS; sx++) {
                     for (int sz = 0; sz < SUBDIVISIONS; sz++) {
-                        // Interpolation factors (0 to 1 across the cell)
+                        // Interpolation factors
                         float u = (sx + 0.5f) / SUBDIVISIONS;
                         float v = (sz + 0.5f) / SUBDIVISIONS;
 
-                        // Bilinear interpolation of depth
+                        // Bilinear interpolation of surface height
+                        float surface_y = s00 * (1-u) * (1-v) +
+                                          s10 * u * (1-v) +
+                                          s01 * (1-u) * v +
+                                          s11 * u * v;
+
+                        // Bilinear interpolation of depth (for color)
                         float depth_interp = d00 * (1-u) * (1-v) +
                                              d10 * u * (1-v) +
                                              d01 * (1-u) * v +
                                              d11 * u * v;
 
-                        // Bilinear interpolation of terrain top
-                        float terrain_interp = t00 * (1-u) * (1-v) +
-                                               t10 * u * (1-v) +
-                                               t01 * (1-u) * v +
-                                               t11 * u * v;
-
-                        if (depth_interp < DEPTH_THRESHOLD * 0.5f) continue;
-
-                        // World position of this sub-quad
+                        // World position
                         float world_x = base_x + (sx + 0.5f) * SUB_SIZE;
                         float world_z = base_z + (sz + 0.5f) * SUB_SIZE;
 
-                        // Add wave displacement
+                        // Wave displacement
                         float wave = sinf(world_x * WAVE_FREQ + wave_time) *
                                      cosf(world_z * WAVE_FREQ * 0.7f + wave_time * 0.8f) *
                                      WAVE_HEIGHT;
 
-                        // Water height with wave
-                        float water_height = depth_interp * TERRAIN_SCALE;
-                        if (water_height < 0.3f) water_height = 0.3f;
-                        if (water_height > 50.0f) water_height = 50.0f;
+                        // Surface Y with wave
+                        float water_y = surface_y + wave;
 
-                        // Water surface Y position
-                        float water_y = terrain_interp + water_height * 0.5f + wave;
+                        // Thickness varies slightly with depth for visual interest
+                        float thickness = SURFACE_THICKNESS + depth_interp * 0.1f;
 
-                        // Choose color based on interpolated depth
+                        // Color based on depth
                         ColorGroup group = (depth_interp > DEEP_THRESHOLD) ?
                                            GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
 
-                        // Add water quad
+                        // Render as thin surface slab
                         add_instance_scaled(group, world_x, water_y, world_z,
-                                           SUB_SIZE, water_height, SUB_SIZE);
+                                           SUB_SIZE * 1.02f, thickness, SUB_SIZE * 1.02f);
                     }
                 }
             }
         }
 
+        #undef GET_SURFACE
         #undef GET_DEPTH
-        #undef GET_TERRAIN_TOP
     }
 
     // ========== COLLECT MATTER VEGETATION INSTANCES ==========
@@ -728,6 +746,20 @@ void render_frame(const GameState *state)
             state->target_world_y,
             state->target_world_z
         };
+
+        // Draw vertical reference line from terrain to cursor (when offset from terrain)
+        float terrain_y = state->target_terrain_y;
+        if (fabsf(target_pos.y - terrain_y) > 0.5f) {
+            DrawLine3D(
+                (Vector3){target_pos.x, terrain_y, target_pos.z},
+                (Vector3){target_pos.x, target_pos.y, target_pos.z},
+                YELLOW
+            );
+            // Draw small marker at terrain level
+            DrawCubeWires((Vector3){target_pos.x, terrain_y, target_pos.z},
+                         CELL_SIZE * 0.5f, 0.5f, CELL_SIZE * 0.5f, YELLOW);
+        }
+
         // Draw wireframe cube at target (size matches one grid cell)
         DrawCubeWires(target_pos, CELL_SIZE, CELL_SIZE, CELL_SIZE, RED);
         // Draw crosshair lines extending up
@@ -740,7 +772,7 @@ void render_frame(const GameState *state)
     }
 
     // ========== UI: TOP-LEFT PANEL ==========
-    DrawRectangle(10, 10, 200, 85, Fade(BLACK, 0.7f));
+    DrawRectangle(10, 10, 230, 98, Fade(BLACK, 0.7f));
 
     // Tool name and color
     const char *tool_name = "TREE";
@@ -770,10 +802,17 @@ void render_frame(const GameState *state)
         DrawText("PAUSED", 130, 22, 14, YELLOW);
     }
 
+    // Height mode indicator
+    if (state->target_absolute_mode) {
+        DrawText(TextFormat("Height: Y=%.1f", state->target_absolute_y), 20, 45, 10, YELLOW);
+    } else {
+        DrawText("Height: GROUND", 20, 45, 10, GRAY);
+    }
+
     // Key bindings (compact)
-    DrawText("1-Heat 2-Cool 3-Tree 4-Water", 20, 45, 10, LIGHTGRAY);
-    DrawText("LMB-Use  RMB-Look  WASD-Move", 20, 58, 10, LIGHTGRAY);
-    DrawText("Q/E-Up/Down  Space-Pause  R-Reset", 20, 71, 10, LIGHTGRAY);
+    DrawText("1-Heat 2-Cool 3-Tree 4-Water", 20, 58, 10, LIGHTGRAY);
+    DrawText("LMB-Use  RMB-Look  WASD-Move", 20, 71, 10, LIGHTGRAY);
+    DrawText("Q/E-Up/Down  [/]-Height  \\-Reset", 20, 84, 10, LIGHTGRAY);
 
     // ========== UI: BOTTOM-LEFT STATS ==========
     DrawRectangle(10, SCREEN_HEIGHT - 85, 260, 75, Fade(BLACK, 0.7f));
@@ -804,6 +843,134 @@ void render_frame(const GameState *state)
     for (int i = 0; i < GROUP_COUNT; i++) total_instances += instanceCounts[i];
     DrawText(TextFormat("Instances: %d  FPS: %d", total_instances, GetFPS()),
              20, SCREEN_HEIGHT - 29, 11, GREEN);
+
+    // ========== UI: RIGHT-SIDE MATTER INFO PANEL ==========
+    if (state->target_valid) {
+        int panel_x = SCREEN_WIDTH - 200;
+        int panel_y = 10;
+        int panel_w = 190;
+        int panel_h = 220;
+
+        DrawRectangle(panel_x, panel_y, panel_w, panel_h, Fade(BLACK, 0.8f));
+
+        // Get matter cell at cursor
+        int matter_x, matter_z;
+        matter_world_to_cell(state->target_world_x, state->target_world_z, &matter_x, &matter_z);
+        const MatterCell *cell = matter_get_cell_const(&state->matter, matter_x, matter_z);
+
+        int y = panel_y + 8;
+        int x = panel_x + 10;
+
+        // Header with cell coordinates
+        DrawText(TextFormat("MATTER [%d,%d]", matter_x, matter_z), x, y, 12, WHITE);
+        y += 18;
+
+        if (cell) {
+            // Temperature
+            float temp_c = kelvin_to_celsius(cell->temperature);
+            Color temp_color = temp_c > 100 ? RED : (temp_c < 0 ? SKYBLUE : WHITE);
+            DrawText(TextFormat("Temp: %.1f C", temp_c), x, y, 11, temp_color);
+            y += 14;
+
+            // Cursor height info
+            if (state->target_absolute_mode) {
+                DrawText(TextFormat("Cursor Y: %.1f (abs)", state->target_absolute_y), x, y, 10, YELLOW);
+            } else {
+                DrawText(TextFormat("Cursor Y: %.1f (ground)", state->target_terrain_y), x, y, 10, GRAY);
+            }
+            y += 14;
+
+            // Divider
+            DrawLine(x, y, x + panel_w - 20, y, DARKGRAY);
+            y += 6;
+
+            // Water phases (H2O)
+            float ice = FIXED_TO_FLOAT(CELL_H2O_ICE(cell));
+            float water = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
+            float steam = FIXED_TO_FLOAT(CELL_H2O_STEAM(cell));
+
+            DrawText("H2O:", x, y, 10, (Color){ 80, 170, 220, 255 });
+            y += 12;
+            if (ice > 0.01f) {
+                DrawText(TextFormat("  Ice: %.2f", ice), x, y, 10, (Color){ 200, 230, 255, 255 });
+                y += 12;
+            }
+            if (water > 0.01f) {
+                DrawText(TextFormat("  Liquid: %.2f", water), x, y, 10, (Color){ 80, 170, 220, 255 });
+                y += 12;
+            }
+            if (steam > 0.01f) {
+                DrawText(TextFormat("  Steam: %.2f", steam), x, y, 10, (Color){ 200, 200, 200, 255 });
+                y += 12;
+            }
+            if (ice <= 0.01f && water <= 0.01f && steam <= 0.01f) {
+                DrawText("  (none)", x, y, 10, DARKGRAY);
+                y += 12;
+            }
+
+            // Silicate (rock/lava)
+            float rock = FIXED_TO_FLOAT(CELL_SILICATE_SOLID(cell));
+            float lava = FIXED_TO_FLOAT(CELL_SILICATE_LIQUID(cell));
+            if (rock > 0.01f || lava > 0.01f) {
+                DrawText("Silicate:", x, y, 10, (Color){ 139, 90, 43, 255 });
+                y += 12;
+                if (rock > 0.01f) {
+                    DrawText(TextFormat("  Rock: %.2f", rock), x, y, 10, GRAY);
+                    y += 12;
+                }
+                if (lava > 0.01f) {
+                    DrawText(TextFormat("  Lava: %.2f", lava), x, y, 10, ORANGE);
+                    y += 12;
+                }
+            }
+
+            // Gases (CO2, smoke)
+            float co2 = FIXED_TO_FLOAT(cell->co2_gas);
+            float smoke = FIXED_TO_FLOAT(cell->smoke_gas);
+            if (co2 > 0.01f || smoke > 0.01f) {
+                DrawText("Gases:", x, y, 10, LIGHTGRAY);
+                y += 12;
+                if (co2 > 0.01f) {
+                    DrawText(TextFormat("  CO2: %.2f", co2), x, y, 10, LIGHTGRAY);
+                    y += 12;
+                }
+                if (smoke > 0.01f) {
+                    DrawText(TextFormat("  Smoke: %.2f", smoke), x, y, 10, DARKGRAY);
+                    y += 12;
+                }
+            }
+
+            // Organics
+            float cellulose = FIXED_TO_FLOAT(cell->cellulose_solid);
+            float ash = FIXED_TO_FLOAT(cell->ash_solid);
+            if (cellulose > 0.01f || ash > 0.01f) {
+                DrawText("Organic:", x, y, 10, (Color){ 34, 139, 34, 255 });
+                y += 12;
+                if (cellulose > 0.01f) {
+                    DrawText(TextFormat("  Cellulose: %.2f", cellulose), x, y, 10, GREEN);
+                    y += 12;
+                }
+                if (ash > 0.01f) {
+                    DrawText(TextFormat("  Ash: %.2f", ash), x, y, 10, GRAY);
+                    y += 12;
+                }
+            }
+
+            // Geology and light at bottom
+            const char *geo_names[] = {"None", "Topsoil", "Rock", "Bedrock", "Lava", "Ignite"};
+            const char *geo_name = (cell->geology_type < 6) ? geo_names[cell->geology_type] : "?";
+            float light = FIXED_TO_FLOAT(cell->light_level);
+
+            // Only show if space remains
+            if (y < panel_y + panel_h - 16) {
+                DrawLine(x, y + 2, x + panel_w - 20, y + 2, DARKGRAY);
+                y += 8;
+                DrawText(TextFormat("Geo: %s  Light: %.0f%%", geo_name, light * 100), x, y, 10, DARKGRAY);
+            }
+        } else {
+            DrawText("(no cell data)", x, y, 10, DARKGRAY);
+        }
+    }
 
     EndDrawing();
 }

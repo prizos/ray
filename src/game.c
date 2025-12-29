@@ -36,6 +36,11 @@ static void game_init_common(GameState *state, uint32_t seed)
     state->current_tool = TOOL_TREE;
     state->target_valid = false;
 
+    // Multi-height cursor (start in relative mode)
+    state->target_absolute_mode = false;
+    state->target_absolute_y = 0.0f;
+    state->target_terrain_y = 0.0f;
+
     // Initialize terrain with seed
     uint32_t actual_seed = seed;
     if (actual_seed == 0) {
@@ -209,6 +214,30 @@ void game_update(GameState *state)
         state->current_tool = TOOL_WATER;
     }
 
+    // Height mode controls
+    float height_step = IsKeyDown(KEY_LEFT_SHIFT) ? 5.0f : 1.0f;
+
+    if (IsKeyPressed(KEY_RIGHT_BRACKET)) {  // ] = raise
+        if (!state->target_absolute_mode) {
+            // First press: enter absolute mode at current terrain + step
+            state->target_absolute_mode = true;
+            state->target_absolute_y = state->target_terrain_y + height_step;
+        } else {
+            state->target_absolute_y += height_step;
+        }
+    }
+    if (IsKeyPressed(KEY_LEFT_BRACKET)) {   // [ = lower
+        if (!state->target_absolute_mode) {
+            state->target_absolute_mode = true;
+            state->target_absolute_y = state->target_terrain_y - height_step;
+        } else {
+            state->target_absolute_y -= height_step;
+        }
+    }
+    if (IsKeyPressed(KEY_BACKSLASH)) {      // \ = back to relative
+        state->target_absolute_mode = false;
+    }
+
     // ========== TARGET INDICATOR (raycast against actual terrain) ==========
     state->target_valid = false;
     {
@@ -259,7 +288,15 @@ void game_update(GameState *state)
                         state->target_grid_z = grid_z;
                         // World position at cell center
                         state->target_world_x = grid_x * CELL_SIZE + CELL_SIZE / 2.0f;
-                        state->target_world_y = ground_height * TERRAIN_SCALE + TERRAIN_SCALE / 2.0f;
+                        float terrain_y = ground_height * TERRAIN_SCALE + TERRAIN_SCALE / 2.0f;
+                        state->target_terrain_y = terrain_y;  // Store for reference
+
+                        // Apply height mode
+                        if (state->target_absolute_mode) {
+                            state->target_world_y = state->target_absolute_y;
+                        } else {
+                            state->target_world_y = terrain_y;  // Follow terrain
+                        }
                         state->target_world_z = grid_z * CELL_SIZE + CELL_SIZE / 2.0f;
 
                         // Read temperature at target for heat/cool tools

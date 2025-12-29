@@ -54,6 +54,11 @@ typedef struct GameState {
     float target_world_z;
     float target_temperature;  // Temperature at target in Celsius (for heat/cool tools)
 
+    // Multi-height cursor system
+    bool target_absolute_mode;    // false = relative to terrain, true = fixed Y
+    float target_absolute_y;      // Fixed Y height when in absolute mode
+    float target_terrain_y;       // Terrain Y at current target (for reference line)
+
     // Terrain
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
 
