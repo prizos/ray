@@ -17,7 +17,6 @@
 // ============ SIMULATION PARAMETERS ============
 
 #define CONDUCTION_RATE 0.05f
-#define FIRE_BOOST 2.0f
 #define RADIATION_RATE 0.002f
 
 // ============ TEST GRID ============
@@ -28,7 +27,6 @@ typedef struct {
     fixed16_t energy;
     fixed16_t temperature;
     fixed16_t thermal_mass;
-    bool has_fuel;
 } GridCell;
 
 typedef struct {
@@ -54,7 +52,6 @@ static void grid_init(TestGrid *g, int w, int h, float temp_k) {
         g->cells[i].thermal_mass = thermal_mass;
         g->cells[i].temperature = temp;
         g->cells[i].energy = energy;
-        g->cells[i].has_fuel = false;
     }
 }
 
@@ -110,52 +107,31 @@ static float grid_min_temp(const TestGrid *g) {
 
 // ============ SIMULATION STEP ============
 
-static void grid_step(TestGrid *g, bool use_fuel_filter, bool use_radiation) {
+// Pure physics-based heat conduction - no arbitrary filters or boosts
+static void grid_step(TestGrid *g, bool use_radiation) {
     fixed16_t *deltas = calloc(g->width * g->height, sizeof(fixed16_t));
+
+    const int dx[4] = {-1, 1, 0, 0};
+    const int dy[4] = {0, 0, -1, 1};
 
     for (int y = 0; y < g->height; y++) {
         for (int x = 0; x < g->width; x++) {
             GridCell *cell = grid_get(g, x, y);
 
-            bool i_have_fuel = cell->has_fuel;
-            bool i_am_hot = cell->temperature > TEST_FIRE_TEMP;
-
-            int dx[4] = {-1, 1, 0, 0};
-            int dy[4] = {0, 0, -1, 1};
-
+            // Heat exchange with neighbors
             for (int d = 0; d < 4; d++) {
                 GridCell *neighbor = grid_get(g, x + dx[d], y + dy[d]);
                 if (!neighbor) continue;
 
-                bool they_have_fuel = neighbor->has_fuel;
-                bool they_are_hot = neighbor->temperature > TEST_FIRE_TEMP;
-
-                // Check for cold cells (below ambient - 50K)
-                bool i_am_cold = cell->temperature < TEST_COLD_TEMP;
-                bool they_are_cold = neighbor->temperature < TEST_COLD_TEMP;
-
-                // Skip if fuel filter is on and neither has fuel/is hot/is cold
-                if (use_fuel_filter) {
-                    if (!i_have_fuel && !they_have_fuel && !i_am_hot && !they_are_hot &&
-                        !i_am_cold && !they_are_cold) {
-                        continue;
-                    }
-                }
-
+                // Heat flow = conductivity * temperature_difference
                 fixed16_t temp_diff = neighbor->temperature - cell->temperature;
-                fixed16_t rate = FLOAT_TO_FIXED(CONDUCTION_RATE);
+                fixed16_t heat_flow = fixed_mul(temp_diff, FLOAT_TO_FIXED(CONDUCTION_RATE));
 
-                if (i_am_hot || they_are_hot) {
-                    rate = fixed_mul(rate, FLOAT_TO_FIXED(FIRE_BOOST));
-                }
-
-                fixed16_t heat_flow = fixed_mul(temp_diff, rate);
-
-                // Limit by donor
-                if (heat_flow > 0) {
+                // Limit by donor's energy (5% per neighbor)
+                if (heat_flow > 0 && neighbor->energy > 0) {
                     fixed16_t max = neighbor->energy / 20;
                     if (heat_flow > max) heat_flow = max;
-                } else if (heat_flow < 0) {
+                } else if (heat_flow < 0 && cell->energy > 0) {
                     fixed16_t max = cell->energy / 20;
                     if (heat_flow < -max) heat_flow = -max;
                 }
@@ -163,15 +139,19 @@ static void grid_step(TestGrid *g, bool use_fuel_filter, bool use_radiation) {
                 deltas[y * g->width + x] += heat_flow;
             }
 
-            // Radiation
+            // Radiative exchange with environment
             if (use_radiation) {
                 fixed16_t excess = cell->temperature - TEST_AMBIENT_TEMP;
-                if (excess > 0) {
-                    fixed16_t rad = fixed_mul(excess, FLOAT_TO_FIXED(RADIATION_RATE));
-                    fixed16_t max_rad = cell->energy / 100;
+                fixed16_t rad = fixed_mul(excess, FLOAT_TO_FIXED(RADIATION_RATE));
+
+                // Limit positive radiation to prevent going negative
+                if (rad > 0) {
+                    fixed16_t max_rad = cell->energy / 50;
                     if (rad > max_rad) rad = max_rad;
-                    deltas[y * g->width + x] -= rad;
                 }
+                // Negative radiation (absorbing heat) is allowed
+
+                deltas[y * g->width + x] -= rad;
             }
         }
     }
@@ -179,6 +159,7 @@ static void grid_step(TestGrid *g, bool use_fuel_filter, bool use_radiation) {
     // Apply deltas
     for (int i = 0; i < g->width * g->height; i++) {
         g->cells[i].energy += deltas[i];
+        if (g->cells[i].energy < 0) g->cells[i].energy = 0;  // Floor at 0K
     }
 
     // Update temperatures
@@ -200,7 +181,7 @@ static bool test_uniform_grid_no_change(void) {
     fixed16_t initial = grid_total_energy(&g);
 
     for (int i = 0; i < 500; i++) {
-        grid_step(&g, false, false);
+        grid_step(&g, false);
     }
 
     fixed16_t final = grid_total_energy(&g);
@@ -220,10 +201,6 @@ static bool test_two_cell_conservation(void) {
     TestGrid g;
     grid_init(&g, 2, 1, 300.0f);
 
-    // Add fuel to enable heat exchange
-    g.cells[0].has_fuel = true;
-    g.cells[1].has_fuel = true;
-
     // Heat one cell
     g.cells[0].energy = fixed_mul(g.cells[0].thermal_mass, FLOAT_TO_FIXED(400.0f));
     cell_update_temp(&g.cells[0]);
@@ -231,7 +208,7 @@ static bool test_two_cell_conservation(void) {
     fixed16_t initial = grid_total_energy(&g);
 
     for (int i = 0; i < 100; i++) {
-        grid_step(&g, false, false);
+        grid_step(&g, false);
     }
 
     fixed16_t final = grid_total_energy(&g);
@@ -262,7 +239,7 @@ static bool test_3x3_center_injection(void) {
     float expected_eq = (8.0f * 300.0f + 500.0f) / 9.0f;
 
     for (int i = 0; i < 500; i++) {
-        grid_step(&g, false, false);
+        grid_step(&g, false);
     }
 
     fixed16_t final = grid_total_energy(&g);
@@ -293,7 +270,7 @@ static bool test_16x16_conservation(void) {
     fixed16_t initial = grid_total_energy(&g);
 
     for (int i = 0; i < 2000; i++) {
-        grid_step(&g, false, false);
+        grid_step(&g, false);
     }
 
     fixed16_t final = grid_total_energy(&g);
@@ -320,7 +297,7 @@ static bool test_heat_spreads_from_source(void) {
 
     // Run a few steps
     for (int i = 0; i < 10; i++) {
-        grid_step(&g, false, false);
+        grid_step(&g, false);
     }
 
     // Neighbors should be warmer than corners
@@ -348,7 +325,7 @@ static bool test_cold_spreads_from_source(void) {
 
     // Run steps - heat should flow INTO the cold cell, cooling neighbors
     for (int i = 0; i < 10; i++) {
-        grid_step(&g, true, false);  // With fuel filter (tests cold detection)
+        grid_step(&g, false);  // With fuel filter (tests cold detection)
     }
 
     // Neighbors should be cooler than they started
@@ -377,7 +354,7 @@ static bool test_equilibrium_reached(void) {
 
     float prev_variance = 1e9f;
     for (int step = 0; step < 1000; step++) {
-        grid_step(&g, false, false);
+        grid_step(&g, false);
 
         if ((step + 1) % 100 == 0) {
             float variance = grid_max_temp(&g) - grid_min_temp(&g);
@@ -393,54 +370,54 @@ static bool test_equilibrium_reached(void) {
     TEST_PASS();
 }
 
-// ============ FUEL FILTER TESTS ============
+// ============ TEMPERATURE GRADIENT TESTS ============
 
-static bool test_no_exchange_without_fuel(void) {
-    TEST_BEGIN("no exchange when no fuel and not hot");
-
-    TestGrid g;
-    grid_init(&g, 4, 4, 300.0f);
-
-    // Create temp gradient but no fuel
-    g.cells[0].energy = fixed_mul(g.cells[0].thermal_mass, FLOAT_TO_FIXED(350.0f));
-    cell_update_temp(&g.cells[0]);
-
-    for (int i = 0; i < 100; i++) {
-        grid_step(&g, true, false);  // With fuel filter
-    }
-
-    // Temperatures should be unchanged (all skipped)
-    ASSERT_FLOAT_EQ(FIXED_TO_FLOAT(g.cells[0].temperature), 350.0f, 0.01f,
-                    "hot cell changed without fuel");
-
-    grid_free(&g);
-    TEST_PASS();
-}
-
-static bool test_exchange_with_fuel(void) {
-    TEST_BEGIN("exchange occurs with fuel");
+static bool test_gradient_always_conducts(void) {
+    TEST_BEGIN("any temperature gradient conducts heat");
 
     TestGrid g;
     grid_init(&g, 4, 4, 300.0f);
 
-    // Add fuel to some cells
-    for (int i = 0; i < 16; i++) {
-        g.cells[i].has_fuel = (i % 2 == 0);
-    }
-
-    // Heat a fuel cell
-    g.cells[0].energy = fixed_mul(g.cells[0].thermal_mass, FLOAT_TO_FIXED(400.0f));
+    // Create small temp gradient (no fuel, not hot, not cold - just different)
+    g.cells[0].energy = fixed_mul(g.cells[0].thermal_mass, FLOAT_TO_FIXED(320.0f));
     cell_update_temp(&g.cells[0]);
 
     float initial_temp = FIXED_TO_FLOAT(g.cells[0].temperature);
 
     for (int i = 0; i < 100; i++) {
-        grid_step(&g, true, false);
+        grid_step(&g, false);
     }
 
+    // Heat should have flowed to neighbors
     float final_temp = FIXED_TO_FLOAT(g.cells[0].temperature);
+    ASSERT(final_temp < initial_temp, "warmer cell didn't conduct heat");
 
-    ASSERT(final_temp < initial_temp, "hot fuel cell didn't cool down");
+    grid_free(&g);
+    TEST_PASS();
+}
+
+static bool test_cold_gradient_conducts(void) {
+    TEST_BEGIN("cold gradient pulls heat from neighbors");
+
+    TestGrid g;
+    grid_init(&g, 4, 4, 300.0f);
+
+    // Cool one cell below others
+    g.cells[0].energy = fixed_mul(g.cells[0].thermal_mass, FLOAT_TO_FIXED(250.0f));
+    cell_update_temp(&g.cells[0]);
+
+    float initial_cold = FIXED_TO_FLOAT(g.cells[0].temperature);
+    float initial_neighbor = FIXED_TO_FLOAT(g.cells[1].temperature);
+
+    for (int i = 0; i < 100; i++) {
+        grid_step(&g, false);
+    }
+
+    float final_cold = FIXED_TO_FLOAT(g.cells[0].temperature);
+    float final_neighbor = FIXED_TO_FLOAT(g.cells[1].temperature);
+
+    ASSERT(final_cold > initial_cold, "cold cell didn't warm up");
+    ASSERT(final_neighbor < initial_neighbor, "neighbor didn't cool down");
 
     grid_free(&g);
     TEST_PASS();
@@ -457,7 +434,7 @@ static bool test_radiation_cools_hot_cells(void) {
     fixed16_t initial = g.cells[0].energy;
 
     for (int i = 0; i < 100; i++) {
-        grid_step(&g, false, true);  // With radiation
+        grid_step(&g, true);  // With radiation
     }
 
     fixed16_t final = g.cells[0].energy;
@@ -477,7 +454,7 @@ static bool test_no_radiation_at_ambient(void) {
     fixed16_t initial = grid_total_energy(&g);
 
     for (int i = 0; i < 100; i++) {
-        grid_step(&g, false, true);  // With radiation
+        grid_step(&g, true);  // With radiation
     }
 
     fixed16_t final = grid_total_energy(&g);
@@ -509,9 +486,9 @@ int main(void) {
     test_equilibrium_reached();
     test_suite_end();
 
-    test_suite_begin("FUEL FILTER");
-    test_no_exchange_without_fuel();
-    test_exchange_with_fuel();
+    test_suite_begin("TEMPERATURE GRADIENTS");
+    test_gradient_always_conducts();
+    test_cold_gradient_conducts();
     test_suite_end();
 
     test_suite_begin("RADIATION");

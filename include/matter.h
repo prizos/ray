@@ -19,10 +19,9 @@
 #define KELVIN_ZERO       FLOAT_TO_FIXED(273.15f)  // 0°C in Kelvin
 #define AMBIENT_TEMP      FLOAT_TO_FIXED(293.15f)  // 20°C
 
-// Energy transfer - tuned for numerical stability at 30Hz
-#define CONDUCTION_RATE      FLOAT_TO_FIXED(0.05f)  // Base heat transfer (low for stability)
-#define FIRE_CONDUCTION_BOOST FLOAT_TO_FIXED(2.0f)  // Multiplier for cells above fire temp
-#define RADIATION_RATE       FLOAT_TO_FIXED(0.002f) // Heat loss to environment
+// Energy transfer rates
+#define CONDUCTION_RATE      FLOAT_TO_FIXED(0.05f)  // Heat transfer coefficient
+#define RADIATION_RATE       FLOAT_TO_FIXED(0.002f) // Radiative exchange with environment
 
 // ============ SUBSTANCES ============
 // Based on real physical/chemical properties

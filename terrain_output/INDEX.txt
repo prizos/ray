@@ -1,0 +1,103 @@
+Terrain Tuning Output
+=====================
+Generated: Sun Dec 28 17:57:10 2025
+
+Center Parameters:
+  Seed: 54321
+  Octaves: 6
+  Lacunarity: 2.00
+  Persistence: 0.50
+  Scale: 0.025
+  Height Range: 0-12
+
+Splay Configuration:
+  Small: +/-20%
+  Large: +/-50%
+
+Generated Variations (17 total):
+--------------------------------
+  [CENTER]
+    octaves=6, lacunarity=2.00, persistence=0.50, scale=0.025
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.025_CENTER_gray.png
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.025_CENTER_color.png
+
+  [oct-50]
+    octaves=3, lacunarity=2.00, persistence=0.50, scale=0.025
+    -> terrain_s54321_o3_l2.00_p0.50_sc0.025_oct-50_gray.png
+    -> terrain_s54321_o3_l2.00_p0.50_sc0.025_oct-50_color.png
+
+  [oct-20]
+    octaves=5, lacunarity=2.00, persistence=0.50, scale=0.025
+    -> terrain_s54321_o5_l2.00_p0.50_sc0.025_oct-20_gray.png
+    -> terrain_s54321_o5_l2.00_p0.50_sc0.025_oct-20_color.png
+
+  [oct+20]
+    octaves=7, lacunarity=2.00, persistence=0.50, scale=0.025
+    -> terrain_s54321_o7_l2.00_p0.50_sc0.025_oct+20_gray.png
+    -> terrain_s54321_o7_l2.00_p0.50_sc0.025_oct+20_color.png
+
+  [oct+50]
+    octaves=8, lacunarity=2.00, persistence=0.50, scale=0.025
+    -> terrain_s54321_o8_l2.00_p0.50_sc0.025_oct+50_gray.png
+    -> terrain_s54321_o8_l2.00_p0.50_sc0.025_oct+50_color.png
+
+  [lac-50]
+    octaves=6, lacunarity=1.50, persistence=0.50, scale=0.025
+    -> terrain_s54321_o6_l1.50_p0.50_sc0.025_lac-50_gray.png
+    -> terrain_s54321_o6_l1.50_p0.50_sc0.025_lac-50_color.png
+
+  [lac-20]
+    octaves=6, lacunarity=1.60, persistence=0.50, scale=0.025
+    -> terrain_s54321_o6_l1.60_p0.50_sc0.025_lac-20_gray.png
+    -> terrain_s54321_o6_l1.60_p0.50_sc0.025_lac-20_color.png
+
+  [lac+20]
+    octaves=6, lacunarity=2.40, persistence=0.50, scale=0.025
+    -> terrain_s54321_o6_l2.40_p0.50_sc0.025_lac+20_gray.png
+    -> terrain_s54321_o6_l2.40_p0.50_sc0.025_lac+20_color.png
+
+  [lac+50]
+    octaves=6, lacunarity=3.00, persistence=0.50, scale=0.025
+    -> terrain_s54321_o6_l3.00_p0.50_sc0.025_lac+50_gray.png
+    -> terrain_s54321_o6_l3.00_p0.50_sc0.025_lac+50_color.png
+
+  [per-50]
+    octaves=6, lacunarity=2.00, persistence=0.25, scale=0.025
+    -> terrain_s54321_o6_l2.00_p0.25_sc0.025_per-50_gray.png
+    -> terrain_s54321_o6_l2.00_p0.25_sc0.025_per-50_color.png
+
+  [per-20]
+    octaves=6, lacunarity=2.00, persistence=0.40, scale=0.025
+    -> terrain_s54321_o6_l2.00_p0.40_sc0.025_per-20_gray.png
+    -> terrain_s54321_o6_l2.00_p0.40_sc0.025_per-20_color.png
+
+  [per+20]
+    octaves=6, lacunarity=2.00, persistence=0.60, scale=0.025
+    -> terrain_s54321_o6_l2.00_p0.60_sc0.025_per+20_gray.png
+    -> terrain_s54321_o6_l2.00_p0.60_sc0.025_per+20_color.png
+
+  [per+50]
+    octaves=6, lacunarity=2.00, persistence=0.75, scale=0.025
+    -> terrain_s54321_o6_l2.00_p0.75_sc0.025_per+50_gray.png
+    -> terrain_s54321_o6_l2.00_p0.75_sc0.025_per+50_color.png
+
+  [scl-50]
+    octaves=6, lacunarity=2.00, persistence=0.50, scale=0.013
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.013_scl-50_gray.png
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.013_scl-50_color.png
+
+  [scl-20]
+    octaves=6, lacunarity=2.00, persistence=0.50, scale=0.020
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.020_scl-20_gray.png
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.020_scl-20_color.png
+
+  [scl+20]
+    octaves=6, lacunarity=2.00, persistence=0.50, scale=0.030
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.030_scl+20_gray.png
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.030_scl+20_color.png
+
+  [scl+50]
+    octaves=6, lacunarity=2.00, persistence=0.50, scale=0.038
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.038_scl+50_gray.png
+    -> terrain_s54321_o6_l2.00_p0.50_sc0.038_scl+50_color.png
+

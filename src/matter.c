@@ -342,30 +342,28 @@ fixed16_t cell_get_temperature(const MatterCell *cell) {
 }
 
 // ============ HEAT CONDUCTION ============
-// Simplified, tested algorithm for numerical stability
+// Pure physics-based heat conduction
+// Heat flows from hot to cold proportional to temperature difference
+// No arbitrary thresholds or optimization hacks
 
 void matter_conduct_heat(MatterState *state) {
     // Temporary array for energy changes (static to avoid stack overflow)
     static fixed16_t energy_delta[MATTER_RES][MATTER_RES];
     memset(energy_delta, 0, sizeof(energy_delta));
 
-    fixed16_t fire_temp = FLOAT_TO_FIXED(400.0f);  // ~127°C
-    fixed16_t min_fuel = FLOAT_TO_FIXED(0.01f);
+    // Neighbor offsets
+    const int dx[4] = {-1, 1, 0, 0};
+    const int dz[4] = {0, 0, -1, 1};
 
-    // Process ALL cells (not just internal) for proper energy conservation
+    // Process all cells
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
             MatterCell *cell = &state->cells[x][z];
-            if (cell->thermal_mass < FLOAT_TO_FIXED(0.01f)) continue;
 
-            fixed16_t my_fuel = cell_get_fuel_mass(cell);
-            bool i_have_fuel = my_fuel >= min_fuel;
-            bool i_am_hot = cell->temperature > fire_temp;
+            // Skip cells with negligible thermal mass
+            if (cell->thermal_mass < FLOAT_TO_FIXED(0.001f)) continue;
 
             // Heat exchange with 4 neighbors
-            int dx[4] = {-1, 1, 0, 0};
-            int dz[4] = {0, 0, -1, 1};
-
             for (int d = 0; d < 4; d++) {
                 int nx = x + dx[d];
                 int nz = z + dz[d];
@@ -374,40 +372,18 @@ void matter_conduct_heat(MatterState *state) {
                 if (nx < 0 || nx >= MATTER_RES || nz < 0 || nz >= MATTER_RES) continue;
 
                 MatterCell *neighbor = &state->cells[nx][nz];
-                if (neighbor->thermal_mass < FLOAT_TO_FIXED(0.01f)) continue;
+                if (neighbor->thermal_mass < FLOAT_TO_FIXED(0.001f)) continue;
 
-                fixed16_t their_fuel = cell_get_fuel_mass(neighbor);
-                bool they_have_fuel = their_fuel >= min_fuel;
-                bool they_are_hot = neighbor->temperature > fire_temp;
-
-                // Check if either cell is cold (below ambient - 50K buffer)
-                fixed16_t cold_threshold = AMBIENT_TEMP - FLOAT_TO_FIXED(50.0f);
-                bool i_am_cold = cell->temperature < cold_threshold;
-                bool they_are_cold = neighbor->temperature < cold_threshold;
-
-                // Skip if neither has fuel AND neither is hot AND neither is cold
-                if (!i_have_fuel && !they_have_fuel && !i_am_hot && !they_are_hot &&
-                    !i_am_cold && !they_are_cold) {
-                    continue;
-                }
-
+                // Heat flow = conductivity * temperature_difference
+                // Positive = receiving heat from neighbor, negative = giving heat
                 fixed16_t temp_diff = neighbor->temperature - cell->temperature;
+                fixed16_t heat_flow = fixed_mul(temp_diff, CONDUCTION_RATE);
 
-                // Calculate heat flow with fire boost
-                fixed16_t effective_rate = CONDUCTION_RATE;
-                if (i_am_hot || they_are_hot) {
-                    effective_rate = fixed_mul(effective_rate, FIRE_CONDUCTION_BOOST);
-                }
-
-                fixed16_t heat_flow = fixed_mul(temp_diff, effective_rate);
-
-                // Limit by donor's energy (5% per neighbor)
-                if (heat_flow > 0) {
-                    // Receiving heat from neighbor
+                // Limit transfer to prevent instability (max 5% of donor's energy per neighbor)
+                if (heat_flow > 0 && neighbor->energy > 0) {
                     fixed16_t max_transfer = neighbor->energy / 20;
                     if (heat_flow > max_transfer) heat_flow = max_transfer;
-                } else if (heat_flow < 0) {
-                    // Giving heat to neighbor
+                } else if (heat_flow < 0 && cell->energy > 0) {
                     fixed16_t max_transfer = cell->energy / 20;
                     if (heat_flow < -max_transfer) heat_flow = -max_transfer;
                 }
@@ -415,14 +391,20 @@ void matter_conduct_heat(MatterState *state) {
                 energy_delta[x][z] += heat_flow;
             }
 
-            // Radiative loss (only when above ambient)
-            fixed16_t excess_temp = cell->temperature - AMBIENT_TEMP;
-            if (excess_temp > 0) {
-                fixed16_t radiation = fixed_mul(excess_temp, RADIATION_RATE);
-                fixed16_t max_rad = cell->energy / 100;
+            // Radiative heat exchange with environment
+            // Net radiation = rate * (T_cell - T_ambient)
+            // Positive excess = lose heat, negative excess = gain heat
+            fixed16_t temp_excess = cell->temperature - AMBIENT_TEMP;
+            fixed16_t radiation = fixed_mul(temp_excess, RADIATION_RATE);
+
+            // Limit radiation to prevent going negative
+            if (radiation > 0) {
+                fixed16_t max_rad = cell->energy / 50;
                 if (radiation > max_rad) radiation = max_rad;
-                energy_delta[x][z] -= radiation;
             }
+            // Note: negative radiation (absorbing from environment) is allowed
+
+            energy_delta[x][z] -= radiation;
         }
     }
 
@@ -431,7 +413,7 @@ void matter_conduct_heat(MatterState *state) {
         for (int z = 0; z < MATTER_RES; z++) {
             state->cells[x][z].energy += energy_delta[x][z];
 
-            // Clamp to absolute zero (0K) - cooling tool can freeze things
+            // Floor at absolute zero (0K)
             if (state->cells[x][z].energy < 0) {
                 state->cells[x][z].energy = 0;
             }
