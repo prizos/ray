@@ -425,10 +425,9 @@ void matter_conduct_heat(MatterState *state) {
         for (int z = 0; z < MATTER_RES; z++) {
             state->cells[x][z].energy += energy_delta[x][z];
 
-            // Clamp to ambient (cells can't cool below environment)
-            fixed16_t min_energy = fixed_mul(state->cells[x][z].thermal_mass, AMBIENT_TEMP);
-            if (state->cells[x][z].energy < min_energy) {
-                state->cells[x][z].energy = min_energy;
+            // Clamp to absolute zero (0K) - cooling tool can freeze things
+            if (state->cells[x][z].energy < 0) {
+                state->cells[x][z].energy = 0;
             }
         }
     }
