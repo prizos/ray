@@ -267,42 +267,46 @@ void game_update(GameState *state)
     }
 
     // ========== CLICK HANDLING ==========
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && state->target_valid) {
+    // Tree tool: single click to place
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && state->target_valid && state->current_tool == TOOL_TREE) {
         int grid_x = state->target_grid_x;
         int grid_z = state->target_grid_z;
 
-        if (state->current_tool == TOOL_TREE) {
-            // Get terrain height at grid cell center
-            int tree_terrain_x = grid_x * 2 + 1;
-            int tree_terrain_z = grid_z * 2 + 1;
-            if (tree_terrain_x >= TERRAIN_RESOLUTION) tree_terrain_x = TERRAIN_RESOLUTION - 1;
-            if (tree_terrain_z >= TERRAIN_RESOLUTION) tree_terrain_z = TERRAIN_RESOLUTION - 1;
-            int ground_height = state->terrain_height[tree_terrain_x][tree_terrain_z];
+        // Get terrain height at grid cell center
+        int tree_terrain_x = grid_x * 2 + 1;
+        int tree_terrain_z = grid_z * 2 + 1;
+        if (tree_terrain_x >= TERRAIN_RESOLUTION) tree_terrain_x = TERRAIN_RESOLUTION - 1;
+        if (tree_terrain_z >= TERRAIN_RESOLUTION) tree_terrain_z = TERRAIN_RESOLUTION - 1;
+        int ground_height = state->terrain_height[tree_terrain_x][tree_terrain_z];
 
-            // Only place tree if there's no water at this location
-            if (water_get_depth(&state->water, tree_terrain_x, tree_terrain_z) <= WATER_MIN_DEPTH &&
-                game_grow_trees(state)) {
-                tree_init(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
-                state->tree_count++;
-            }
-        } else if (state->current_tool == TOOL_HEAT) {
-            // Add heat to matter cell - 2-3 clicks should ignite vegetation
+        // Only place tree if there's no water at this location
+        if (water_get_depth(&state->water, tree_terrain_x, tree_terrain_z) <= WATER_MIN_DEPTH &&
+            game_grow_trees(state)) {
+            tree_init(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
+            state->tree_count++;
+        }
+    }
+
+    // Heat and Water tools: hold to continuously add
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && state->target_valid) {
+        if (state->current_tool == TOOL_HEAT) {
+            // Add heat to matter cell - hold to spray fire
             matter_add_heat_at(&state->matter,
                               state->target_world_x,
                               state->target_world_z,
-                              FLOAT_TO_FIXED(300.0f));
+                              FLOAT_TO_FIXED(500.0f));  // Less per frame since continuous
         } else if (state->current_tool == TOOL_WATER) {
             // For water tool, add water to both systems
             water_add_at_world(&state->water,
                               state->target_world_x,
                               state->target_world_z,
-                              3.0f);  // Add 3 units of water depth
+                              5.0f);  // Less per frame since continuous
 
             // Also add to matter system
             matter_add_water_at(&state->matter,
                                state->target_world_x,
                                state->target_world_z,
-                               FLOAT_TO_FIXED(1.0f));
+                               FLOAT_TO_FIXED(2.0f));
         }
     }
 
