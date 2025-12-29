@@ -382,15 +382,11 @@ void game_update(GameState *state)
         }
     }
 
-    // ========== WATER SIMULATION ==========
+    // ========== WATER-MATTER SYNC (Phase 1: water → matter) ==========
+    // Sync water depth to matter h2o_liquid BEFORE matter simulation
+    // This allows thermodynamics (evaporation, heat absorption) to work on water
     if (!state->paused) {
-        water_update(&state->water, delta);
-
-        // NOTE: Water sync from water simulation to matter system is DISABLED
-        // The water simulation (water.c) handles fluid dynamics
-        // The matter system (matter.c) handles ground, atmosphere, and vegetation
-        // They are separate systems - water affects rendering but not matter thermodynamics
-        // This prevents energy drift bugs from the coupling
+        matter_sync_from_water(&state->matter, &state->water);
     }
 
     // ========== TREE SHADOW EFFECTS ==========
@@ -543,6 +539,19 @@ void game_update(GameState *state)
     // ========== MATTER SIMULATION (thermodynamic vegetation, fire, nutrients) ==========
     if (!state->paused) {
         matter_update(&state->matter, delta);
+    }
+
+    // ========== WATER-MATTER SYNC (Phase 2: matter → water) ==========
+    // Sync matter h2o_liquid back to water depth AFTER matter simulation
+    // This reflects evaporation (water level drops when boiled)
+    if (!state->paused) {
+        matter_sync_to_water(&state->matter, &state->water);
+    }
+
+    // ========== WATER FLUID DYNAMICS ==========
+    // Run water simulation AFTER matter sync to propagate any water changes
+    if (!state->paused) {
+        water_update(&state->water, delta);
     }
 }
 

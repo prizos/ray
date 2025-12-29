@@ -125,6 +125,29 @@ test-matter: test-matter-unit test-matter-integration test-matter-system
 	@echo ""
 	@echo "All matter tests passed!"
 
+# ============ WATER-MATTER SYSTEM TESTS ============
+# Tests for water-matter interaction (phase transitions, suppression, etc.)
+
+# Water-matter unit tests (isolated theory validation)
+test-water-matter-unit: $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/test_water_matter_unit.c -o $(BUILD_DIR)/test_water_matter_unit $(LDFLAGS)
+	./$(BUILD_DIR)/test_water_matter_unit
+
+# Water-matter integration tests (grid simulation with both systems)
+test-water-matter-integration: $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(TEST_DIR)/test_water_matter_integration.c -o $(BUILD_DIR)/test_water_matter_integration $(LDFLAGS)
+	./$(BUILD_DIR)/test_water_matter_integration
+
+# Run all water-matter tests
+test-water-matter: test-water-matter-unit test-water-matter-integration
+	@echo ""
+	@echo "All water-matter tests passed!"
+
+# Run ALL thermodynamics tests
+test-thermo: test-matter test-water-matter
+	@echo ""
+	@echo "All thermodynamics tests passed!"
+
 # Clean (removes build dir with all .o and .d files)
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) $(TUNE_TARGET)
@@ -161,4 +184,4 @@ tune-dry-run: $(TUNE_TARGET)
 tune-clean:
 	rm -rf terrain_output $(TUNE_TARGET)
 
-.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system tune-terrain tune-init tune-single tune-dry-run tune-clean
+.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-water-matter test-water-matter-unit test-water-matter-integration test-thermo tune-terrain tune-init tune-single tune-dry-run tune-clean

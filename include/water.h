@@ -75,7 +75,7 @@ typedef struct {
 } WaterCell;
 
 // Complete water simulation state
-typedef struct {
+typedef struct WaterState {
     WaterCell cells[WATER_RESOLUTION][WATER_RESOLUTION];
     fixed16_t terrain_height[WATER_RESOLUTION][WATER_RESOLUTION];  // Cached terrain
 

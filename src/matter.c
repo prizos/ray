@@ -1,7 +1,11 @@
 #include "matter.h"
+#include "water.h"  // For WaterState definition in sync functions
 #include "noise.h"
 #include <string.h>
 #include <stdlib.h>
+
+// Forward declaration for static helper
+static void matter_process_o2_displacement(MatterState *state);
 
 // ============ SUBSTANCE PROPERTIES TABLE ============
 // Real physical constants (simplified for simulation)
@@ -266,7 +270,15 @@ bool cell_can_combust(const MatterCell *cell, Substance fuel) {
     // Need oxidizer (oxygen)
     if (cell->mass[SUBST_OXYGEN] < FLOAT_TO_FIXED(0.001f)) return false;
 
+    // Water suppression: liquid water prevents combustion (Theory 5)
+    if (cell->h2o_liquid > FLOAT_TO_FIXED(0.1f)) return false;
+
     return true;
+}
+
+// Get total H2O mass in a cell (all phases)
+fixed16_t cell_total_h2o(const MatterCell *cell) {
+    return cell->h2o_ice + cell->h2o_liquid + cell->h2o_steam;
 }
 
 void cell_update_cache(MatterCell *cell) {
@@ -276,7 +288,9 @@ void cell_update_cache(MatterCell *cell) {
     cell->liquid_mass = 0;
     cell->gas_mass = 0;
 
+    // Process non-H2O substances (H2O is tracked separately by phase)
     for (int s = 0; s < SUBST_COUNT; s++) {
+        if (s == SUBST_H2O) continue;  // Skip - handled separately
         if (cell->mass[s] <= 0) continue;
 
         cell->total_mass += cell->mass[s];
@@ -291,6 +305,23 @@ void cell_update_cache(MatterCell *cell) {
         }
     }
 
+    // Add H2O phases with phase-specific specific heats
+    if (cell->h2o_ice > 0) {
+        cell->total_mass += cell->h2o_ice;
+        cell->solid_mass += cell->h2o_ice;
+        cell->thermal_mass += fixed_mul(cell->h2o_ice, SPECIFIC_HEAT_ICE);
+    }
+    if (cell->h2o_liquid > 0) {
+        cell->total_mass += cell->h2o_liquid;
+        cell->liquid_mass += cell->h2o_liquid;
+        cell->thermal_mass += fixed_mul(cell->h2o_liquid, SPECIFIC_HEAT_WATER);
+    }
+    if (cell->h2o_steam > 0) {
+        cell->total_mass += cell->h2o_steam;
+        cell->gas_mass += cell->h2o_steam;
+        cell->thermal_mass += fixed_mul(cell->h2o_steam, SPECIFIC_HEAT_STEAM);
+    }
+
     // Calculate temperature: T = E / thermal_mass
     if (cell->thermal_mass > FLOAT_TO_FIXED(0.01f)) {
         cell->temperature = fixed_div(cell->energy, cell->thermal_mass);
@@ -298,11 +329,12 @@ void cell_update_cache(MatterCell *cell) {
         cell->temperature = AMBIENT_TEMP;
     }
 
-    // Clamp temperature to reasonable range
-    if (cell->temperature < 0) cell->temperature = 0;
-    if (cell->temperature > FLOAT_TO_FIXED(2000.0f)) {
-        cell->temperature = FLOAT_TO_FIXED(2000.0f);
+    // Enforce absolute zero floor only - no upper limit (Theory 4 & 6)
+    if (cell->temperature < 0) {
+        cell->temperature = 0;
+        cell->energy = 0;  // At absolute zero, no thermal energy
     }
+    // NO upper clamp - temperatures can be arbitrarily high
 }
 
 fixed16_t cell_get_temperature(const MatterCell *cell) {
@@ -607,19 +639,29 @@ void matter_step(MatterState *state) {
         }
     }
 
+    // O2 displacement by water (must come before combustion check)
+    matter_process_o2_displacement(state);
+
     // Heat conduction
     matter_conduct_heat(state);
 
     // Process combustion
     matter_process_combustion(state);
 
+    // Process phase transitions (evaporation, condensation, melting, freezing)
+    matter_process_phase_transitions(state);
+
     // Replenish atmospheric gases (we're outdoors, unlimited air supply)
-    // This prevents O2 depletion from stopping fires unrealistically
+    // Only replenish cells not submerged in water
     fixed16_t ambient_o2 = FLOAT_TO_FIXED(0.021f);
     fixed16_t ambient_n2 = FLOAT_TO_FIXED(0.078f);
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
             MatterCell *cell = &state->cells[x][z];
+
+            // Skip replenishment for submerged cells (O2 is displaced by water)
+            if (cell->h2o_liquid > FLOAT_TO_FIXED(0.5f)) continue;
+
             // Slowly replenish toward ambient (10% per tick)
             fixed16_t o2_diff = ambient_o2 - cell->mass[SUBST_OXYGEN];
             fixed16_t n2_diff = ambient_n2 - cell->mass[SUBST_NITROGEN];
@@ -687,7 +729,12 @@ void matter_add_water_at(MatterState *state, float world_x, float world_z,
 
     MatterCell *cell = matter_get_cell(state, cx, cz);
     if (cell) {
-        cell_add_mass(cell, SUBST_H2O, mass);
+        // Add water as liquid phase (at current temperature)
+        cell->h2o_liquid += mass;
+
+        // Add thermal energy for the new water (at ambient temperature)
+        fixed16_t water_thermal = fixed_mul(mass, SPECIFIC_HEAT_WATER);
+        cell->energy += fixed_mul(water_thermal, AMBIENT_TEMP);
     }
 }
 
@@ -729,4 +776,154 @@ uint32_t matter_checksum(const MatterState *state) {
     }
 
     return sum;
+}
+
+// ============ WATER SYNC ============
+
+void matter_sync_from_water(MatterState *matter, const struct WaterState *water) {
+    if (!matter || !water) return;
+
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            // Get water depth from water simulation
+            fixed16_t depth = water->cells[x][z].water_height;
+
+            // Convert depth to liquid water mass
+            // WATER_MASS_PER_DEPTH = 1.0 g per unit depth (simplified)
+            fixed16_t new_liquid = fixed_mul(depth, WATER_MASS_PER_DEPTH);
+
+            MatterCell *cell = &matter->cells[x][z];
+            fixed16_t old_liquid = cell->h2o_liquid;
+
+            if (new_liquid != old_liquid) {
+                // Adjust energy for mass change
+                fixed16_t delta = new_liquid - old_liquid;
+                if (delta > 0) {
+                    // Water added - bring in at ambient temperature
+                    fixed16_t delta_thermal = fixed_mul(delta, SPECIFIC_HEAT_WATER);
+                    cell->energy += fixed_mul(delta_thermal, AMBIENT_TEMP);
+                } else {
+                    // Water removed - energy leaves with water
+                    fixed16_t delta_thermal = fixed_mul(-delta, SPECIFIC_HEAT_WATER);
+                    cell->energy -= fixed_mul(delta_thermal, cell->temperature);
+                    if (cell->energy < 0) cell->energy = 0;
+                }
+                cell->h2o_liquid = new_liquid;
+            }
+        }
+    }
+}
+
+void matter_sync_to_water(const MatterState *matter, struct WaterState *water) {
+    if (!matter || !water) return;
+
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            // Convert liquid water mass back to depth
+            fixed16_t liquid = matter->cells[x][z].h2o_liquid;
+            fixed16_t depth = fixed_div(liquid, WATER_MASS_PER_DEPTH);
+            water->cells[x][z].water_height = depth;
+        }
+    }
+}
+
+// ============ PHASE TRANSITIONS ============
+
+void matter_process_phase_transitions(MatterState *state) {
+    fixed16_t evap_rate = FLOAT_TO_FIXED(0.01f);  // g/tick max evaporation
+    fixed16_t condense_rate = FLOAT_TO_FIXED(0.01f);
+    fixed16_t melt_rate = FLOAT_TO_FIXED(0.01f);
+    fixed16_t freeze_rate = FLOAT_TO_FIXED(0.01f);
+
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            MatterCell *cell = &state->cells[x][z];
+
+            // === EVAPORATION (liquid → steam at boiling point) ===
+            if (cell->temperature >= WATER_BOILING_POINT && cell->h2o_liquid > 0) {
+                // Calculate excess energy above boiling
+                fixed16_t excess_temp = cell->temperature - WATER_BOILING_POINT;
+                if (excess_temp > 0) {
+                    // How much can we evaporate with available excess energy?
+                    fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
+                    fixed16_t max_by_energy = fixed_div(excess_energy, LATENT_HEAT_VAPORIZATION);
+                    fixed16_t max_by_mass = cell->h2o_liquid;
+
+                    fixed16_t evap = evap_rate;
+                    if (evap > max_by_energy) evap = max_by_energy;
+                    if (evap > max_by_mass) evap = max_by_mass;
+                    if (evap <= 0) continue;
+
+                    // Transfer mass (conservation of mass)
+                    cell->h2o_liquid -= evap;
+                    cell->h2o_steam += evap;
+
+                    // Consume latent heat (conservation of energy)
+                    cell->energy -= fixed_mul(evap, LATENT_HEAT_VAPORIZATION);
+                }
+            }
+
+            // === CONDENSATION (steam → liquid below boiling point) ===
+            if (cell->temperature < WATER_BOILING_POINT && cell->h2o_steam > 0) {
+                fixed16_t condense = condense_rate;
+                if (condense > cell->h2o_steam) condense = cell->h2o_steam;
+
+                // Transfer mass
+                cell->h2o_steam -= condense;
+                cell->h2o_liquid += condense;
+
+                // Release latent heat
+                cell->energy += fixed_mul(condense, LATENT_HEAT_VAPORIZATION);
+            }
+
+            // === MELTING (ice → liquid at melting point) ===
+            if (cell->temperature >= WATER_MELTING_POINT && cell->h2o_ice > 0) {
+                fixed16_t excess_temp = cell->temperature - WATER_MELTING_POINT;
+                if (excess_temp > 0) {
+                    fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
+                    fixed16_t max_by_energy = fixed_div(excess_energy, LATENT_HEAT_FUSION);
+                    fixed16_t max_by_mass = cell->h2o_ice;
+
+                    fixed16_t melt = melt_rate;
+                    if (melt > max_by_energy) melt = max_by_energy;
+                    if (melt > max_by_mass) melt = max_by_mass;
+                    if (melt <= 0) continue;
+
+                    cell->h2o_ice -= melt;
+                    cell->h2o_liquid += melt;
+                    cell->energy -= fixed_mul(melt, LATENT_HEAT_FUSION);
+                }
+            }
+
+            // === FREEZING (liquid → ice below melting point) ===
+            if (cell->temperature < WATER_MELTING_POINT && cell->h2o_liquid > 0) {
+                fixed16_t freeze = freeze_rate;
+                if (freeze > cell->h2o_liquid) freeze = cell->h2o_liquid;
+
+                cell->h2o_liquid -= freeze;
+                cell->h2o_ice += freeze;
+                cell->energy += fixed_mul(freeze, LATENT_HEAT_FUSION);
+            }
+        }
+    }
+}
+
+// ============ O2 DISPLACEMENT BY WATER ============
+
+static void matter_process_o2_displacement(MatterState *state) {
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            MatterCell *cell = &state->cells[x][z];
+
+            // Calculate submersion factor (0 = dry, 1 = fully submerged)
+            fixed16_t submersion = fixed_div(cell->h2o_liquid, FLOAT_TO_FIXED(1.0f));
+            if (submersion > FIXED_ONE) submersion = FIXED_ONE;
+            if (submersion < 0) submersion = 0;
+
+            // O2 displaced proportionally by water
+            fixed16_t air_fraction = FIXED_ONE - submersion;
+            fixed16_t ambient_o2 = FLOAT_TO_FIXED(0.021f);
+            cell->mass[SUBST_OXYGEN] = fixed_mul(ambient_o2, air_fraction);
+        }
+    }
 }

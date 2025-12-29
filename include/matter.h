@@ -102,19 +102,42 @@ typedef struct {
 // Global properties table (defined in matter.c)
 extern const SubstanceProps SUBST_PROPS[SUBST_COUNT];
 
+// ============ PHYSICAL CONSTANTS FOR WATER ============
+
+// Phase transition temperatures (Kelvin)
+#define WATER_MELTING_POINT     FLOAT_TO_FIXED(273.15f)
+#define WATER_BOILING_POINT     FLOAT_TO_FIXED(373.15f)
+
+// Latent heats (J/g) - energy for phase change WITHOUT temperature change
+#define LATENT_HEAT_FUSION      FLOAT_TO_FIXED(334.0f)    // Ice ↔ Water
+#define LATENT_HEAT_VAPORIZATION FLOAT_TO_FIXED(2260.0f)  // Water ↔ Steam
+
+// Specific heats (J/g·K) - energy to raise 1g by 1K
+#define SPECIFIC_HEAT_ICE       FLOAT_TO_FIXED(2.09f)
+#define SPECIFIC_HEAT_WATER     FLOAT_TO_FIXED(4.18f)
+#define SPECIFIC_HEAT_STEAM     FLOAT_TO_FIXED(2.01f)
+
+// Water-matter sync constant
+#define WATER_MASS_PER_DEPTH    FLOAT_TO_FIXED(1.0f)  // g water per unit depth
+
 // ============ CELL STRUCTURE ============
 // A single cell in the simulation grid
 // Energy is stored IN the matter, temperature is derived
 
 typedef struct {
     // Primary state
-    fixed16_t mass[SUBST_COUNT];    // Mass of each substance (kg)
+    fixed16_t mass[SUBST_COUNT];    // Mass of each substance (g) - excludes H2O
     fixed16_t energy;               // Total thermal energy (Joules)
+
+    // H2O tracked by phase (separate from mass array for proper thermodynamics)
+    fixed16_t h2o_ice;              // Solid water (g)
+    fixed16_t h2o_liquid;           // Liquid water (g) - synced with water sim
+    fixed16_t h2o_steam;            // Steam/vapor (g)
 
     // Cached values (recomputed each step)
     fixed16_t temperature;          // K = energy / thermal_mass
     fixed16_t thermal_mass;         // Sum(mass[i] * specific_heat[i])
-    fixed16_t total_mass;           // Sum of all mass
+    fixed16_t total_mass;           // Sum of all mass including H2O
 
     // Per-phase totals (derived from mass + temperature)
     fixed16_t solid_mass;
@@ -201,6 +224,23 @@ void matter_process_combustion(MatterState *state);
 
 // Gas diffusion (optional, for smoke spread)
 void matter_diffuse_gases(MatterState *state);
+
+// Process phase transitions (evaporation, condensation, melting, freezing)
+void matter_process_phase_transitions(MatterState *state);
+
+// ============ API: WATER SYNC ============
+
+// Forward declaration for water state
+struct WaterState;
+
+// Sync liquid water from water simulation to matter system
+void matter_sync_from_water(MatterState *matter, const struct WaterState *water);
+
+// Sync liquid water from matter system back to water simulation
+void matter_sync_to_water(const MatterState *matter, struct WaterState *water);
+
+// Get total H2O mass in a cell (all phases)
+fixed16_t cell_total_h2o(const MatterCell *cell);
 
 // ============ API: QUERIES ============
 
