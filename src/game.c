@@ -316,17 +316,12 @@ void game_update(GameState *state)
                               state->target_world_z,
                               FLOAT_TO_FIXED(-500.0f));  // Same rate as heating
         } else if (state->current_tool == TOOL_WATER) {
-            // For water tool, add water to both systems
+            // Add water ONLY to water simulation
+            // matter_sync_from_water will handle adding to matter system with proper energy
             water_add_at_world(&state->water,
                               state->target_world_x,
                               state->target_world_z,
-                              5.0f);  // Less per frame since continuous
-
-            // Also add to matter system
-            matter_add_water_at(&state->matter,
-                               state->target_world_x,
-                               state->target_world_z,
-                               FLOAT_TO_FIXED(2.0f));
+                              2.0f);  // Reduced rate since sync handles matter
         }
     }
 

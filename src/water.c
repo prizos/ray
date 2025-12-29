@@ -65,9 +65,11 @@ void water_init(WaterState *water, const int terrain[WATER_RESOLUTION][WATER_RES
     memset(water, 0, sizeof(WaterState));
 
     // Cache terrain heights in fixed-point (using [x][z] indexing)
+    // ice_height is already zeroed by memset
     for (int x = 0; x < WATER_RESOLUTION; x++) {
         for (int z = 0; z < WATER_RESOLUTION; z++) {
             water->terrain_height[x][z] = INT_TO_FIXED(terrain[x][z]);
+            // water->ice_height[x][z] = 0; // Already 0 from memset
         }
     }
 
@@ -82,6 +84,7 @@ void water_reset(WaterState *water) {
     for (int x = 0; x < WATER_RESOLUTION; x++) {
         for (int z = 0; z < WATER_RESOLUTION; z++) {
             water->cells[x][z].water_height = 0;
+            water->ice_height[x][z] = 0;
         }
     }
     water->tick = 0;
@@ -123,9 +126,6 @@ void water_step(WaterState *water) {
     // Minimum height difference to trigger flow (prevents jitter)
     const fixed16_t MIN_DIFF = FLOAT_TO_FIXED(0.001f);
 
-    // Track edge drainage for map boundaries
-    fixed16_t total_edge_drain = 0;
-
     // Debug tracking
     static int debug_counter = 0;
     fixed16_t water_before = water_calculate_total(water);
@@ -156,8 +156,9 @@ void water_step(WaterState *water) {
     // Process horizontal edges (between x and x+1)
     for (int x = 0; x < WATER_RESOLUTION - 1; x++) {
         for (int z = 0; z < WATER_RESOLUTION; z++) {
-            fixed16_t h1 = water->terrain_height[x][z] + water->cells[x][z].water_height;
-            fixed16_t h2 = water->terrain_height[x+1][z] + water->cells[x+1][z].water_height;
+            // Ice acts as solid terrain - blocks water flow
+            fixed16_t h1 = water->terrain_height[x][z] + water->ice_height[x][z] + water->cells[x][z].water_height;
+            fixed16_t h2 = water->terrain_height[x+1][z] + water->ice_height[x+1][z] + water->cells[x+1][z].water_height;
 
             fixed16_t diff = h1 - h2;
             if (diff > -MIN_DIFF && diff < MIN_DIFF) continue;
@@ -184,8 +185,9 @@ void water_step(WaterState *water) {
     // Process vertical edges (between z and z+1)
     for (int x = 0; x < WATER_RESOLUTION; x++) {
         for (int z = 0; z < WATER_RESOLUTION - 1; z++) {
-            fixed16_t h1 = water->terrain_height[x][z] + water->cells[x][z].water_height;
-            fixed16_t h2 = water->terrain_height[x][z+1] + water->cells[x][z+1].water_height;
+            // Ice acts as solid terrain - blocks water flow
+            fixed16_t h1 = water->terrain_height[x][z] + water->ice_height[x][z] + water->cells[x][z].water_height;
+            fixed16_t h2 = water->terrain_height[x][z+1] + water->ice_height[x][z+1] + water->cells[x][z+1].water_height;
 
             fixed16_t diff = h1 - h2;
             if (diff > -MIN_DIFF && diff < MIN_DIFF) continue;
@@ -245,50 +247,8 @@ void water_step(WaterState *water) {
 
     free(edges);
 
-    // ============ PROCESS MAP EDGES (drainage) ============
-    // Only cells at the actual map boundary drain water
-    // Must also account for outflow scaling
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        // North edge (z = 0)
-        if (water->cells[x][0].water_height > 0) {
-            fixed16_t available = water->cells[x][0].water_height;
-            fixed16_t drain = fixed_mul(available, WATER_EDGE_DRAIN_RATE);
-            // Scale if total outflow exceeds available
-            fixed16_t remaining = available + delta[x][0];  // After internal transfers
-            if (remaining < drain) drain = (remaining > 0) ? remaining : 0;
-            delta[x][0] -= drain;
-            total_edge_drain += drain;
-        }
-        // South edge (z = max)
-        if (water->cells[x][WATER_RESOLUTION-1].water_height > 0) {
-            fixed16_t available = water->cells[x][WATER_RESOLUTION-1].water_height;
-            fixed16_t drain = fixed_mul(available, WATER_EDGE_DRAIN_RATE);
-            fixed16_t remaining = available + delta[x][WATER_RESOLUTION-1];
-            if (remaining < drain) drain = (remaining > 0) ? remaining : 0;
-            delta[x][WATER_RESOLUTION-1] -= drain;
-            total_edge_drain += drain;
-        }
-    }
-    for (int z = 1; z < WATER_RESOLUTION - 1; z++) {  // Skip corners (already processed)
-        // West edge (x = 0)
-        if (water->cells[0][z].water_height > 0) {
-            fixed16_t available = water->cells[0][z].water_height;
-            fixed16_t drain = fixed_mul(available, WATER_EDGE_DRAIN_RATE);
-            fixed16_t remaining = available + delta[0][z];
-            if (remaining < drain) drain = (remaining > 0) ? remaining : 0;
-            delta[0][z] -= drain;
-            total_edge_drain += drain;
-        }
-        // East edge (x = max)
-        if (water->cells[WATER_RESOLUTION-1][z].water_height > 0) {
-            fixed16_t available = water->cells[WATER_RESOLUTION-1][z].water_height;
-            fixed16_t drain = fixed_mul(available, WATER_EDGE_DRAIN_RATE);
-            fixed16_t remaining = available + delta[WATER_RESOLUTION-1][z];
-            if (remaining < drain) drain = (remaining > 0) ? remaining : 0;
-            delta[WATER_RESOLUTION-1][z] -= drain;
-            total_edge_drain += drain;
-        }
-    }
+    // Note: No edge drainage - hermetic simulation
+    // Water at boundaries stays at boundaries (like hitting a wall)
 
     // ============ APPLY ALL DELTAS ============
     for (int x = 0; x < WATER_RESOLUTION; x++) {
@@ -307,23 +267,20 @@ void water_step(WaterState *water) {
 
     water->tick++;
 
-    // Debug: verify mass conservation (disabled by default)
+    // Debug: verify mass conservation (hermetic simulation)
 #ifdef WATER_DEBUG
     fixed16_t water_after = water_calculate_total(water);
-    fixed16_t actual_loss = water_before - water_after;
-    fixed16_t unexplained = actual_loss - total_edge_drain;
+    fixed16_t drift = water_before - water_after;
 
     debug_counter++;
     if (debug_counter % 600 == 0) {  // Every 10 seconds
-        TraceLog(LOG_INFO, "WATER DEBUG: before=%.4f after=%.4f edge_drain=%.4f unexplained=%.6f",
+        TraceLog(LOG_INFO, "WATER DEBUG: before=%.4f after=%.4f drift=%.6f",
                  FIXED_TO_FLOAT(water_before),
                  FIXED_TO_FLOAT(water_after),
-                 FIXED_TO_FLOAT(total_edge_drain),
-                 FIXED_TO_FLOAT(unexplained));
+                 FIXED_TO_FLOAT(drift));
     }
 #else
     (void)water_before;
-    (void)total_edge_drain;
     (void)debug_counter;
 #endif
 }
@@ -372,7 +329,8 @@ float water_get_depth_at_world(const WaterState *water, float world_x, float wor
 
 fixed16_t water_get_surface_height(const WaterState *water, int x, int z) {
     if (!water_cell_valid(x, z)) return 0;
-    return water->terrain_height[x][z] + water->cells[x][z].water_height;
+    // Include ice layer (acts as solid terrain)
+    return water->terrain_height[x][z] + water->ice_height[x][z] + water->cells[x][z].water_height;
 }
 
 // ============ CONSERVATION & SYNC ============

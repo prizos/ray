@@ -61,8 +61,7 @@ static inline fixed16_t fixed_div(fixed16_t a, fixed16_t b) {
 // Flow thresholds for stability
 #define WATER_MIN_HEAD_DIFF FLOAT_TO_FIXED(0.001f)  // Ignore tiny pressure differences (prevents numerical drift)
 
-// Edge drainage - only at actual map boundaries
-#define WATER_EDGE_DRAIN_RATE FLOAT_TO_FIXED(0.3f)  // Gentle edge drainage
+// Note: No edge drainage - hermetic simulation (water conserved at boundaries)
 
 // Waterfall threshold (terrain drop > 1 unit triggers waterfall)
 #define WATER_FALL_THRESHOLD INT_TO_FIXED(1)
@@ -78,6 +77,7 @@ typedef struct {
 typedef struct WaterState {
     WaterCell cells[WATER_RESOLUTION][WATER_RESOLUTION];
     fixed16_t terrain_height[WATER_RESOLUTION][WATER_RESOLUTION];  // Cached terrain
+    fixed16_t ice_height[WATER_RESOLUTION][WATER_RESOLUTION];      // Ice layer (blocks water flow)
 
     uint32_t tick;            // Simulation tick counter
     float accumulator;        // Time accumulator for fixed timestep

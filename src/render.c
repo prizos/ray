@@ -58,6 +58,22 @@ typedef enum {
     GROUP_CELLULOSE,        // Green vegetation (all biomass)
     GROUP_BURNING_MATTER,   // Orange/red fire
     GROUP_ASH,              // Gray residue
+
+    // Phase-based rendering (unified phase system)
+    GROUP_ICE,              // Frozen water (white/translucent)
+    GROUP_STEAM,            // Water vapor (white mist)
+    GROUP_LAVA_HOT,         // Liquid silicate >2500K (yellow-white)
+    GROUP_LAVA_COOLING,     // Liquid silicate 2259-2500K (orange)
+    GROUP_LAVA_COLD,        // Solidifying lava (dark red)
+    GROUP_LIQUID_N2,        // Cryogenic nitrogen (pale blue)
+    GROUP_LIQUID_O2,        // Cryogenic oxygen (pale blue)
+    GROUP_SOLID_N2,         // Frozen nitrogen (white frost)
+    GROUP_SOLID_O2,         // Frozen oxygen (blue frost)
+
+    // Geology-based terrain
+    GROUP_TERRAIN_TOPSOIL,  // Brown organic soil
+    GROUP_TERRAIN_BEDROCK,  // Dark dense rock
+
     GROUP_COUNT
 } ColorGroup;
 
@@ -141,7 +157,22 @@ void render_init(void)
         // Matter-based (physics substances)
         { 86, 141, 58, 255 },   // Cellulose (green vegetation)
         { 255, 120, 30, 255 },  // Burning matter (orange-red)
-        { 80, 80, 80, 255 }     // Ash (dark gray)
+        { 80, 80, 80, 255 },    // Ash (dark gray)
+
+        // Phase-based rendering
+        { 200, 240, 255, 200 }, // Ice (white/translucent blue)
+        { 255, 255, 255, 80 },  // Steam (white mist, very transparent)
+        { 255, 255, 200, 255 }, // Lava hot (yellow-white, >2500K)
+        { 255, 120, 20, 255 },  // Lava cooling (orange, 2259-2500K)
+        { 200, 50, 10, 255 },   // Lava cold (dark red, near solidification)
+        { 180, 220, 255, 150 }, // Liquid N2 (pale blue, translucent)
+        { 180, 200, 255, 150 }, // Liquid O2 (pale blue, translucent)
+        { 240, 250, 255, 255 }, // Solid N2 (white frost)
+        { 200, 220, 255, 255 }, // Solid O2 (blue frost)
+
+        // Geology-based terrain
+        { 101, 67, 33, 255 },   // Topsoil (brown)
+        { 64, 64, 64, 255 }     // Bedrock (dark gray)
     };
 
     for (int i = 0; i < GROUP_COUNT; i++) {
@@ -469,7 +500,7 @@ void render_frame(const GameState *state)
                 bool is_burning = cell_can_combust(cell, SUBST_CELLULOSE);
 
                 // Render cellulose (vegetation/biomass)
-                float cellulose = FIXED_TO_FLOAT(cell->mass[SUBST_CELLULOSE]);
+                float cellulose = FIXED_TO_FLOAT(cell->cellulose_solid);
                 if (cellulose > MIN_DENSITY) {
                     float height = VEG_HEIGHT_BASE + cellulose * VEG_HEIGHT_SCALE;
                     float y = terrain_top + height / 2.0f;
@@ -479,12 +510,90 @@ void render_frame(const GameState *state)
                 }
 
                 // Render ash
-                float ash = FIXED_TO_FLOAT(cell->mass[SUBST_ASH]);
+                float ash = FIXED_TO_FLOAT(cell->ash_solid);
                 if (ash > MIN_DENSITY) {
                     float height = 0.05f + ash * 0.15f;
                     float y = terrain_top + height / 2.0f;
                     add_instance_scaled(GROUP_ASH, world_x, y, world_z,
                                        MATTER_CELL_SIZE * 0.5f, height, MATTER_CELL_SIZE * 0.5f);
+                }
+
+                // ========== RENDER ICE (frozen water) ==========
+                float ice = FIXED_TO_FLOAT(CELL_H2O_ICE(cell));
+                if (ice > MIN_DENSITY) {
+                    float height = 0.1f + ice * 0.5f;
+                    float y = terrain_top + height / 2.0f;
+                    add_instance_scaled(GROUP_ICE, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.9f, height, MATTER_CELL_SIZE * 0.9f);
+                }
+
+                // ========== RENDER LAVA (liquid silicate) ==========
+                float lava = FIXED_TO_FLOAT(CELL_SILICATE_LIQUID(cell));
+                if (lava > MIN_DENSITY) {
+                    float height = 0.2f + lava * 0.8f;
+                    float y = terrain_top + height / 2.0f;
+
+                    // Temperature-based coloring
+                    float temp = FIXED_TO_FLOAT(cell->temperature);
+                    ColorGroup lava_grp;
+                    if (temp > 2500.0f) {
+                        lava_grp = GROUP_LAVA_HOT;       // Yellow-white hot
+                    } else if (temp > 2350.0f) {
+                        lava_grp = GROUP_LAVA_COOLING;   // Orange
+                    } else {
+                        lava_grp = GROUP_LAVA_COLD;      // Dark red
+                    }
+
+                    add_instance_scaled(lava_grp, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.95f, height, MATTER_CELL_SIZE * 0.95f);
+                }
+
+                // ========== RENDER STEAM (water vapor) ==========
+                float steam = FIXED_TO_FLOAT(CELL_H2O_STEAM(cell));
+                if (steam > MIN_DENSITY * 2.0f) {  // Higher threshold for steam
+                    // Steam floats above the terrain
+                    float height = steam * 1.0f;
+                    float y = terrain_top + 2.0f + height / 2.0f;
+                    add_instance_scaled(GROUP_STEAM, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 1.2f, height, MATTER_CELL_SIZE * 1.2f);
+                }
+
+                // ========== RENDER CRYOGENIC LIQUIDS ==========
+                // Liquid Nitrogen (very cold environments only)
+                float liquid_n2 = FIXED_TO_FLOAT(CELL_N2_LIQUID(cell));
+                if (liquid_n2 > MIN_DENSITY) {
+                    float height = 0.1f + liquid_n2 * 0.4f;
+                    float y = terrain_top + height / 2.0f;
+                    add_instance_scaled(GROUP_LIQUID_N2, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.85f, height, MATTER_CELL_SIZE * 0.85f);
+                }
+
+                // Liquid Oxygen (very cold environments only)
+                float liquid_o2 = FIXED_TO_FLOAT(CELL_O2_LIQUID(cell));
+                if (liquid_o2 > MIN_DENSITY) {
+                    float height = 0.1f + liquid_o2 * 0.4f;
+                    float y = terrain_top + height / 2.0f;
+                    add_instance_scaled(GROUP_LIQUID_O2, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.85f, height, MATTER_CELL_SIZE * 0.85f);
+                }
+
+                // ========== RENDER FROZEN GASES ==========
+                // Solid Nitrogen (extremely cold)
+                float solid_n2 = FIXED_TO_FLOAT(CELL_N2_SOLID(cell));
+                if (solid_n2 > MIN_DENSITY) {
+                    float height = 0.05f + solid_n2 * 0.3f;
+                    float y = terrain_top + height / 2.0f;
+                    add_instance_scaled(GROUP_SOLID_N2, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.7f, height, MATTER_CELL_SIZE * 0.7f);
+                }
+
+                // Solid Oxygen (extremely cold)
+                float solid_o2 = FIXED_TO_FLOAT(CELL_O2_SOLID(cell));
+                if (solid_o2 > MIN_DENSITY) {
+                    float height = 0.05f + solid_o2 * 0.3f;
+                    float y = terrain_top + height / 2.0f;
+                    add_instance_scaled(GROUP_SOLID_O2, world_x, y, world_z,
+                                       MATTER_CELL_SIZE * 0.7f, height, MATTER_CELL_SIZE * 0.7f);
                 }
             }
         }
@@ -496,12 +605,19 @@ void render_frame(const GameState *state)
 
     BeginMode3D(state->camera);
 
-    // Draw opaque groups first (all except water)
+    // Helper to check if a group is transparent
+    #define IS_TRANSPARENT_GROUP(g) ( \
+        (g) == GROUP_WATER_SHALLOW || (g) == GROUP_WATER_DEEP || \
+        (g) == GROUP_STEAM || (g) == GROUP_ICE || \
+        (g) == GROUP_LIQUID_N2 || (g) == GROUP_LIQUID_O2 \
+    )
+
+    // Draw opaque groups first (skip transparent for later)
     if (useInstancing) {
         // GPU instanced rendering - one draw call per color group
         for (int i = 0; i < GROUP_COUNT; i++) {
-            // Skip water groups for now (draw them last for transparency)
-            if (i == GROUP_WATER_SHALLOW || i == GROUP_WATER_DEEP) continue;
+            // Skip transparent groups for now (draw them last)
+            if (IS_TRANSPARENT_GROUP(i)) continue;
             if (instanceCounts[i] > 0) {
                 DrawMeshInstanced(cubeMesh, cubeMaterials[i], instanceTransforms[i], instanceCounts[i]);
             }
@@ -509,36 +625,40 @@ void render_frame(const GameState *state)
     } else {
         // Fallback: individual DrawMesh calls
         for (int i = 0; i < GROUP_COUNT; i++) {
-            if (i == GROUP_WATER_SHALLOW || i == GROUP_WATER_DEEP) continue;
+            if (IS_TRANSPARENT_GROUP(i)) continue;
             for (int j = 0; j < instanceCounts[i]; j++) {
                 DrawMesh(cubeMesh, cubeMaterials[i], instanceTransforms[i][j]);
             }
         }
     }
 
-    // Draw dynamic water instances last (for transparency)
-    // Water groups are semi-transparent and should be rendered after opaque geometry
+    // Draw transparent groups last (water, steam, ice, cryogenic liquids)
+    // Transparent objects should be rendered after opaque geometry
+    ColorGroup transparent_groups[] = {
+        GROUP_ICE, GROUP_LIQUID_N2, GROUP_LIQUID_O2,  // Less transparent first
+        GROUP_WATER_SHALLOW, GROUP_WATER_DEEP,        // Water
+        GROUP_STEAM                                    // Most transparent last
+    };
+    int num_transparent = sizeof(transparent_groups) / sizeof(transparent_groups[0]);
+
     if (useInstancing) {
-        if (instanceCounts[GROUP_WATER_SHALLOW] > 0) {
-            DrawMeshInstanced(cubeMesh, cubeMaterials[GROUP_WATER_SHALLOW],
-                             instanceTransforms[GROUP_WATER_SHALLOW],
-                             instanceCounts[GROUP_WATER_SHALLOW]);
-        }
-        if (instanceCounts[GROUP_WATER_DEEP] > 0) {
-            DrawMeshInstanced(cubeMesh, cubeMaterials[GROUP_WATER_DEEP],
-                             instanceTransforms[GROUP_WATER_DEEP],
-                             instanceCounts[GROUP_WATER_DEEP]);
+        for (int t = 0; t < num_transparent; t++) {
+            ColorGroup grp = transparent_groups[t];
+            if (instanceCounts[grp] > 0) {
+                DrawMeshInstanced(cubeMesh, cubeMaterials[grp],
+                                 instanceTransforms[grp], instanceCounts[grp]);
+            }
         }
     } else {
-        for (int j = 0; j < instanceCounts[GROUP_WATER_SHALLOW]; j++) {
-            DrawMesh(cubeMesh, cubeMaterials[GROUP_WATER_SHALLOW],
-                    instanceTransforms[GROUP_WATER_SHALLOW][j]);
-        }
-        for (int j = 0; j < instanceCounts[GROUP_WATER_DEEP]; j++) {
-            DrawMesh(cubeMesh, cubeMaterials[GROUP_WATER_DEEP],
-                    instanceTransforms[GROUP_WATER_DEEP][j]);
+        for (int t = 0; t < num_transparent; t++) {
+            ColorGroup grp = transparent_groups[t];
+            for (int j = 0; j < instanceCounts[grp]; j++) {
+                DrawMesh(cubeMesh, cubeMaterials[grp], instanceTransforms[grp][j]);
+            }
         }
     }
+
+    #undef IS_TRANSPARENT_GROUP
 
     EndMode3D();
 

@@ -110,12 +110,12 @@ static bool test_init_has_atmosphere(void) {
     // Check center cell has atmosphere
     MatterCell *center = &state.cells[80][80];
 
-    ASSERT(center->mass[SUBST_NITROGEN] > 0, "no nitrogen in atmosphere");
-    ASSERT(center->mass[SUBST_OXYGEN] > 0, "no oxygen in atmosphere");
+    ASSERT(CELL_N2_GAS(center) > 0, "no nitrogen in atmosphere");
+    ASSERT(CELL_O2_GAS(center) > 0, "no oxygen in atmosphere");
 
     // N2:O2 ratio should be roughly 78:21
-    float n2 = FIXED_TO_FLOAT(center->mass[SUBST_NITROGEN]);
-    float o2 = FIXED_TO_FLOAT(center->mass[SUBST_OXYGEN]);
+    float n2 = FIXED_TO_FLOAT(CELL_N2_GAS(center));
+    float o2 = FIXED_TO_FLOAT(CELL_O2_GAS(center));
     float ratio = n2 / o2;
     ASSERT_FLOAT_EQ(ratio, 78.0f / 21.0f, 0.5f, "wrong N2/O2 ratio");
 
@@ -134,7 +134,7 @@ static bool test_init_has_ground(void) {
     // All cells should have silicate
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
-            ASSERT(state.cells[x][z].mass[SUBST_SILICATE] > 0,
+            ASSERT(CELL_SILICATE_SOLID(&state.cells[x][z]) > 0,
                    "missing silicate at (%d,%d)", x, z);
         }
     }
@@ -158,8 +158,8 @@ static bool test_init_seed_determinism(void) {
         int x = (i * 17) % MATTER_RES;
         int z = (i * 23) % MATTER_RES;
 
-        ASSERT(state1.cells[x][z].mass[SUBST_CELLULOSE] ==
-               state2.cells[x][z].mass[SUBST_CELLULOSE],
+        ASSERT(state1.cells[x][z].cellulose_solid ==
+               state2.cells[x][z].cellulose_solid,
                "seed not deterministic at (%d,%d)", x, z);
     }
 
@@ -249,7 +249,7 @@ static bool test_heat_injection_center(void) {
     // Add fuel to center region to enable heat transfer
     for (int x = 75; x < 85; x++) {
         for (int z = 75; z < 85; z++) {
-            state.cells[x][z].mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.1f);
+            state.cells[x][z].cellulose_solid = FLOAT_TO_FIXED(0.1f);
             cell_update_cache(&state.cells[x][z]);
         }
     }
@@ -296,7 +296,7 @@ static bool test_heat_injection_corner(void) {
     // Add fuel to corner region
     for (int x = 0; x < 10; x++) {
         for (int z = 0; z < 10; z++) {
-            state.cells[x][z].mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.1f);
+            state.cells[x][z].cellulose_solid = FLOAT_TO_FIXED(0.1f);
             cell_update_cache(&state.cells[x][z]);
         }
     }
@@ -340,7 +340,7 @@ static bool test_heat_propagation_pattern(void) {
     // Add fuel in a 20x20 region around center
     for (int x = 70; x < 90; x++) {
         for (int z = 70; z < 90; z++) {
-            state.cells[x][z].mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.1f);
+            state.cells[x][z].cellulose_solid = FLOAT_TO_FIXED(0.1f);
             cell_update_cache(&state.cells[x][z]);
         }
     }
@@ -383,7 +383,7 @@ static bool test_combustion_requires_fuel(void) {
 
     // Heat a cell without fuel
     MatterCell *cell = &state.cells[80][80];
-    cell->mass[SUBST_CELLULOSE] = 0;
+    cell->cellulose_solid = 0;
     cell->energy = fixed_mul(cell->thermal_mass, FLOAT_TO_FIXED(600.0f));
     cell_update_cache(cell);
 
@@ -405,8 +405,8 @@ static bool test_combustion_requires_oxygen(void) {
     MatterCell *cell = &state.cells[80][80];
 
     // Add fuel but remove oxygen
-    cell->mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.1f);
-    cell->mass[SUBST_OXYGEN] = 0;
+    cell->cellulose_solid = FLOAT_TO_FIXED(0.1f);
+    CELL_O2_GAS(cell) = 0;
     cell->energy = fixed_mul(cell->thermal_mass, FLOAT_TO_FIXED(600.0f));
     cell_update_cache(cell);
 
@@ -427,8 +427,8 @@ static bool test_combustion_requires_temperature(void) {
     MatterCell *cell = &state.cells[80][80];
 
     // Add fuel and oxygen, but keep cold
-    cell->mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.1f);
-    cell->mass[SUBST_OXYGEN] = FLOAT_TO_FIXED(0.05f);
+    cell->cellulose_solid = FLOAT_TO_FIXED(0.1f);
+    CELL_O2_GAS(cell) = FLOAT_TO_FIXED(0.05f);
     cell_update_cache(cell);
 
     // At ambient temp (293K), should not combust
@@ -455,8 +455,8 @@ static bool test_combustion_consumes_fuel(void) {
     MatterCell *cell = &state.cells[80][80];
 
     // Setup for combustion - add fuel and oxygen
-    cell->mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.5f);
-    cell->mass[SUBST_OXYGEN] = FLOAT_TO_FIXED(0.5f);
+    cell->cellulose_solid = FLOAT_TO_FIXED(0.5f);
+    CELL_O2_GAS(cell) = FLOAT_TO_FIXED(0.5f);
 
     // First update cache to get correct thermal_mass
     cell_update_cache(cell);
@@ -469,7 +469,7 @@ static bool test_combustion_consumes_fuel(void) {
     float temp = FIXED_TO_FLOAT(cell->temperature);
     ASSERT(temp > 550.0f, "temperature not at ignition level: %.1fK", temp);
 
-    fixed16_t initial_fuel = cell->mass[SUBST_CELLULOSE];
+    fixed16_t initial_fuel = cell->cellulose_solid;
 
     // Run combustion
     for (int i = 0; i < 100; i++) {
@@ -477,7 +477,7 @@ static bool test_combustion_consumes_fuel(void) {
         cell_update_cache(cell);
     }
 
-    fixed16_t final_fuel = cell->mass[SUBST_CELLULOSE];
+    fixed16_t final_fuel = cell->cellulose_solid;
 
     ASSERT(final_fuel < initial_fuel, "fuel not consumed");
 
@@ -496,12 +496,12 @@ static bool test_combustion_produces_byproducts(void) {
     MatterCell *cell = &state.cells[80][80];
 
     // Clear initial byproducts
-    fixed16_t initial_co2 = cell->mass[SUBST_CO2];
-    fixed16_t initial_ash = cell->mass[SUBST_ASH];
+    fixed16_t initial_co2 = cell->co2_gas;
+    fixed16_t initial_ash = cell->ash_solid;
 
     // Setup for combustion - add fuel and oxygen
-    cell->mass[SUBST_CELLULOSE] = FLOAT_TO_FIXED(0.5f);
-    cell->mass[SUBST_OXYGEN] = FLOAT_TO_FIXED(0.5f);
+    cell->cellulose_solid = FLOAT_TO_FIXED(0.5f);
+    CELL_O2_GAS(cell) = FLOAT_TO_FIXED(0.5f);
 
     // First update cache to get correct thermal_mass
     cell_update_cache(cell);
@@ -516,8 +516,8 @@ static bool test_combustion_produces_byproducts(void) {
         cell_update_cache(cell);
     }
 
-    ASSERT(cell->mass[SUBST_CO2] > initial_co2, "no CO2 produced");
-    ASSERT(cell->mass[SUBST_ASH] > initial_ash, "no ash produced");
+    ASSERT(cell->co2_gas > initial_co2, "no CO2 produced");
+    ASSERT(cell->ash_solid > initial_ash, "no ash produced");
 
     TEST_PASS();
 }

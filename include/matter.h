@@ -50,6 +50,36 @@ typedef enum {
     SUBST_COUNT         // 9 substances
 } Substance;
 
+// ============ PHASEABLE SUBSTANCES ============
+// Substances that can transition between solid/liquid/gas at simulation temperatures
+
+typedef enum {
+    PHASEABLE_H2O = 0,      // 273K melting, 373K boiling
+    PHASEABLE_SILICATE,     // 2259K melting, 2776K boiling
+    PHASEABLE_N2,           // 63K melting, 77K boiling (cryogenic)
+    PHASEABLE_O2,           // 54K melting, 90K boiling (cryogenic)
+    PHASEABLE_COUNT         // 4 substances with phase tracking
+} PhaseableSubstance;
+
+// Mass tracked per phase for phaseable substances
+typedef struct {
+    fixed16_t solid;
+    fixed16_t liquid;
+    fixed16_t gas;
+} PhaseMass;
+
+// ============ GEOLOGY TYPES ============
+// Layered ground with different properties
+
+typedef enum {
+    GEOLOGY_NONE = 0,       // Air/empty
+    GEOLOGY_TOPSOIL,        // Organic-rich, lower melting point
+    GEOLOGY_ROCK,           // Standard silicate rock
+    GEOLOGY_BEDROCK,        // Dense, harder to melt (+10% melting point)
+    GEOLOGY_LAVA,           // Molten silicate (derived from liquid silicate presence)
+    GEOLOGY_IGNITE,         // Cooled lava - becomes rock
+} GeologyType;
+
 // ============ PHASE ============
 // Derived from temperature, not stored
 
@@ -101,44 +131,92 @@ typedef struct {
 // Global properties table (defined in matter.c)
 extern const SubstanceProps SUBST_PROPS[SUBST_COUNT];
 
-// ============ PHYSICAL CONSTANTS FOR WATER ============
+// ============ PHYSICAL CONSTANTS FOR ALL PHASEABLE SUBSTANCES ============
 
-// Phase transition temperatures (Kelvin)
-#define WATER_MELTING_POINT     FLOAT_TO_FIXED(273.15f)
-#define WATER_BOILING_POINT     FLOAT_TO_FIXED(373.15f)
+// --- WATER (H2O) ---
+#define WATER_MELTING_POINT     FLOAT_TO_FIXED(273.15f)   // 0°C
+#define WATER_BOILING_POINT     FLOAT_TO_FIXED(373.15f)   // 100°C
+#define LATENT_HEAT_H2O_FUSION       FLOAT_TO_FIXED(334.0f)    // J/g Ice↔Water
+#define LATENT_HEAT_H2O_VAPORIZATION FLOAT_TO_FIXED(2260.0f)   // J/g Water↔Steam
+#define SPECIFIC_HEAT_H2O_SOLID      FLOAT_TO_FIXED(2.09f)     // Ice
+#define SPECIFIC_HEAT_H2O_LIQUID     FLOAT_TO_FIXED(4.18f)     // Water
+#define SPECIFIC_HEAT_H2O_GAS        FLOAT_TO_FIXED(2.01f)     // Steam
 
-// Latent heats (J/g) - energy for phase change WITHOUT temperature change
-#define LATENT_HEAT_FUSION      FLOAT_TO_FIXED(334.0f)    // Ice ↔ Water
-#define LATENT_HEAT_VAPORIZATION FLOAT_TO_FIXED(2260.0f)  // Water ↔ Steam
+// --- SILICATE (SiO2) - Rock/Sand/Glass ---
+#define SILICATE_MELTING_POINT  FLOAT_TO_FIXED(2259.0f)   // 1986°C
+#define SILICATE_BOILING_POINT  FLOAT_TO_FIXED(2776.0f)   // 2503°C
+#define LATENT_HEAT_SILICATE_FUSION       FLOAT_TO_FIXED(400.0f)   // J/g
+#define LATENT_HEAT_SILICATE_VAPORIZATION FLOAT_TO_FIXED(12000.0f) // J/g
+#define SPECIFIC_HEAT_SILICATE_SOLID      FLOAT_TO_FIXED(0.7f)
+#define SPECIFIC_HEAT_SILICATE_LIQUID     FLOAT_TO_FIXED(1.0f)     // Lava
+#define SPECIFIC_HEAT_SILICATE_GAS        FLOAT_TO_FIXED(0.8f)
 
-// Specific heats (J/g·K) - energy to raise 1g by 1K
-#define SPECIFIC_HEAT_ICE       FLOAT_TO_FIXED(2.09f)
-#define SPECIFIC_HEAT_WATER     FLOAT_TO_FIXED(4.18f)
-#define SPECIFIC_HEAT_STEAM     FLOAT_TO_FIXED(2.01f)
+// --- NITROGEN (N2) - Cryogenic ---
+#define NITROGEN_MELTING_POINT  FLOAT_TO_FIXED(63.15f)    // -210°C
+#define NITROGEN_BOILING_POINT  FLOAT_TO_FIXED(77.36f)    // -196°C
+#define LATENT_HEAT_N2_FUSION       FLOAT_TO_FIXED(25.7f)
+#define LATENT_HEAT_N2_VAPORIZATION FLOAT_TO_FIXED(199.0f)
+#define SPECIFIC_HEAT_N2_SOLID      FLOAT_TO_FIXED(1.0f)
+#define SPECIFIC_HEAT_N2_LIQUID     FLOAT_TO_FIXED(2.0f)
+#define SPECIFIC_HEAT_N2_GAS        FLOAT_TO_FIXED(1.04f)
+
+// --- OXYGEN (O2) - Cryogenic ---
+#define OXYGEN_MELTING_POINT    FLOAT_TO_FIXED(54.36f)    // -219°C
+#define OXYGEN_BOILING_POINT    FLOAT_TO_FIXED(90.19f)    // -183°C
+#define LATENT_HEAT_O2_FUSION       FLOAT_TO_FIXED(13.9f)
+#define LATENT_HEAT_O2_VAPORIZATION FLOAT_TO_FIXED(213.0f)
+#define SPECIFIC_HEAT_O2_SOLID      FLOAT_TO_FIXED(0.9f)
+#define SPECIFIC_HEAT_O2_LIQUID     FLOAT_TO_FIXED(1.7f)
+#define SPECIFIC_HEAT_O2_GAS        FLOAT_TO_FIXED(0.92f)
+
+// --- LEGACY ALIASES (for compatibility) ---
+#define LATENT_HEAT_FUSION      LATENT_HEAT_H2O_FUSION
+#define LATENT_HEAT_VAPORIZATION LATENT_HEAT_H2O_VAPORIZATION
+#define SPECIFIC_HEAT_ICE       SPECIFIC_HEAT_H2O_SOLID
+#define SPECIFIC_HEAT_WATER     SPECIFIC_HEAT_H2O_LIQUID
+#define SPECIFIC_HEAT_STEAM     SPECIFIC_HEAT_H2O_GAS
 
 // Water-matter sync constant
 #define WATER_MASS_PER_DEPTH    FLOAT_TO_FIXED(1.0f)  // g water per unit depth
+
+// Phase transition rate limit (prevents instability)
+#define PHASE_TRANSITION_RATE   FLOAT_TO_FIXED(0.1f)  // max mass per tick
+
+// Geology modifiers
+#define GEOLOGY_BEDROCK_MELT_MULT   FLOAT_TO_FIXED(1.1f)   // +10% melting point
+#define GEOLOGY_TOPSOIL_MELT_MULT   FLOAT_TO_FIXED(0.95f)  // -5% melting point
 
 // ============ CELL STRUCTURE ============
 // A single cell in the simulation grid
 // Energy is stored IN the matter, temperature is derived
 
 typedef struct {
-    // Primary state
-    fixed16_t mass[SUBST_COUNT];    // Mass of each substance (g) - excludes H2O
-    fixed16_t energy;               // Total thermal energy (Joules)
+    // Phase-tracked substances (4 substances * 3 phases each)
+    // H2O: solid=ice, liquid=water, gas=steam
+    // Silicate: solid=rock, liquid=lava, gas=silicate vapor
+    // N2/O2: cryogenic phases
+    PhaseMass phase_mass[PHASEABLE_COUNT];
 
-    // H2O tracked by phase (separate from mass array for proper thermodynamics)
-    fixed16_t h2o_ice;              // Solid water (g)
-    fixed16_t h2o_liquid;           // Liquid water (g) - synced with water sim
-    fixed16_t h2o_steam;            // Steam/vapor (g)
+    // Non-phaseable substances (always fixed phase at sim temps)
+    fixed16_t co2_gas;              // Always gas (sublimes)
+    fixed16_t smoke_gas;            // Always gas (particulates)
+    fixed16_t ash_solid;            // Always solid (residue)
+    fixed16_t cellulose_solid;      // Decomposes, doesn't melt
+
+    // Thermal state
+    fixed16_t energy;               // Total thermal energy (Joules)
+    fixed16_t temperature;          // K = energy / thermal_mass (cached)
+
+    // Geology layer info
+    uint8_t geology_type;           // GeologyType enum
+    uint8_t depth_from_surface;     // 0-255 cells from original surface
+    uint16_t _geology_padding;      // Alignment padding
 
     // Cached values (recomputed each step)
-    fixed16_t temperature;          // K = energy / thermal_mass
     fixed16_t thermal_mass;         // Sum(mass[i] * specific_heat[i])
-    fixed16_t total_mass;           // Sum of all mass including H2O
+    fixed16_t total_mass;           // Sum of all mass
 
-    // Per-phase totals (derived from mass + temperature)
+    // Per-phase totals (derived from phase_mass)
     fixed16_t solid_mass;
     fixed16_t liquid_mass;
     fixed16_t gas_mass;
@@ -148,6 +226,25 @@ typedef struct {
     int terrain_height;             // Ground level at this cell
 
 } MatterCell;
+
+// ============ CONVENIENCE MACROS FOR PHASE ACCESS ============
+// Access phase mass for common substances
+
+#define CELL_H2O_ICE(cell)      ((cell)->phase_mass[PHASEABLE_H2O].solid)
+#define CELL_H2O_LIQUID(cell)   ((cell)->phase_mass[PHASEABLE_H2O].liquid)
+#define CELL_H2O_STEAM(cell)    ((cell)->phase_mass[PHASEABLE_H2O].gas)
+
+#define CELL_SILICATE_SOLID(cell)  ((cell)->phase_mass[PHASEABLE_SILICATE].solid)
+#define CELL_SILICATE_LIQUID(cell) ((cell)->phase_mass[PHASEABLE_SILICATE].liquid)
+#define CELL_SILICATE_GAS(cell)    ((cell)->phase_mass[PHASEABLE_SILICATE].gas)
+
+#define CELL_N2_SOLID(cell)     ((cell)->phase_mass[PHASEABLE_N2].solid)
+#define CELL_N2_LIQUID(cell)    ((cell)->phase_mass[PHASEABLE_N2].liquid)
+#define CELL_N2_GAS(cell)       ((cell)->phase_mass[PHASEABLE_N2].gas)
+
+#define CELL_O2_SOLID(cell)     ((cell)->phase_mass[PHASEABLE_O2].solid)
+#define CELL_O2_LIQUID(cell)    ((cell)->phase_mass[PHASEABLE_O2].liquid)
+#define CELL_O2_GAS(cell)       ((cell)->phase_mass[PHASEABLE_O2].gas)
 
 // ============ SIMULATION STATE ============
 
@@ -183,7 +280,7 @@ void matter_reset(MatterState *state);
 
 // ============ API: CELL OPERATIONS ============
 
-// Add mass of a substance to a cell
+// Add mass of a substance to a cell (routes to correct phase based on temperature)
 void cell_add_mass(MatterCell *cell, Substance s, fixed16_t amount);
 
 // Remove mass (returns actual amount removed)
@@ -192,8 +289,11 @@ fixed16_t cell_remove_mass(MatterCell *cell, Substance s, fixed16_t amount);
 // Add thermal energy to a cell
 void cell_add_energy(MatterCell *cell, fixed16_t joules);
 
-// Get mass of a specific substance
+// Get mass of a specific substance (all phases combined for phaseable substances)
 fixed16_t cell_get_mass(const MatterCell *cell, Substance s);
+
+// Get total mass of a phaseable substance (all 3 phases)
+fixed16_t cell_get_phaseable_total(const MatterCell *cell, PhaseableSubstance ps);
 
 // Get total mass of all fuel substances
 fixed16_t cell_get_fuel_mass(const MatterCell *cell);
@@ -206,6 +306,17 @@ void cell_update_cache(MatterCell *cell);
 
 // Get temperature (uses cached value)
 fixed16_t cell_get_temperature(const MatterCell *cell);
+
+// ============ API: GEOLOGY ============
+
+// Initialize geology type based on terrain height
+void matter_init_geology(MatterState *state, const int terrain[MATTER_RES][MATTER_RES]);
+
+// Get effective melting point for silicate based on geology type
+fixed16_t cell_get_silicate_melting_point(const MatterCell *cell);
+
+// Update geology type based on phase state (lava detection)
+void cell_update_geology(MatterCell *cell);
 
 // ============ API: SIMULATION ============
 
@@ -224,8 +335,14 @@ void matter_process_combustion(MatterState *state);
 // Gas diffusion (optional, for smoke spread)
 void matter_diffuse_gases(MatterState *state);
 
-// Process phase transitions (evaporation, condensation, melting, freezing)
+// Process phase transitions for ALL phaseable substances
 void matter_process_phase_transitions(MatterState *state);
+
+// Process phase transition for a single substance in a cell
+void cell_process_phase_transition(MatterCell *cell, PhaseableSubstance ps);
+
+// Flow liquids (water and lava) based on terrain slope and viscosity
+void matter_flow_liquids(MatterState *state);
 
 // ============ API: WATER SYNC ============
 
@@ -240,6 +357,23 @@ void matter_sync_to_water(const MatterState *matter, struct WaterState *water);
 
 // Get total H2O mass in a cell (all phases)
 fixed16_t cell_total_h2o(const MatterCell *cell);
+
+// ============ API: PHASEABLE SUBSTANCE PROPERTIES ============
+
+// Get melting point for a phaseable substance (with geology modifiers for silicate)
+fixed16_t get_phaseable_melting_point(PhaseableSubstance ps, const MatterCell *cell);
+
+// Get boiling point for a phaseable substance
+fixed16_t get_phaseable_boiling_point(PhaseableSubstance ps);
+
+// Get latent heat of fusion for a phaseable substance
+fixed16_t get_phaseable_latent_fusion(PhaseableSubstance ps);
+
+// Get latent heat of vaporization for a phaseable substance
+fixed16_t get_phaseable_latent_vaporization(PhaseableSubstance ps);
+
+// Get specific heat for a phaseable substance in a given phase
+fixed16_t get_phaseable_specific_heat(PhaseableSubstance ps, Phase phase);
 
 // ============ API: QUERIES ============
 

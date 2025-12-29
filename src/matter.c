@@ -4,8 +4,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Forward declaration for static helper
-static void matter_process_o2_displacement(MatterState *state);
 
 // ============ SUBSTANCE PROPERTIES TABLE ============
 // Real physical constants (simplified for simulation)
@@ -219,23 +217,202 @@ Phase substance_get_phase(Substance s, fixed16_t temp_kelvin) {
     return PHASE_GAS;
 }
 
+// ============ PHASEABLE SUBSTANCE PROPERTY GETTERS ============
+
+fixed16_t get_phaseable_melting_point(PhaseableSubstance ps, const MatterCell *cell) {
+    fixed16_t mp;
+    switch (ps) {
+        case PHASEABLE_H2O:      mp = WATER_MELTING_POINT; break;
+        case PHASEABLE_SILICATE: mp = SILICATE_MELTING_POINT; break;
+        case PHASEABLE_N2:       mp = NITROGEN_MELTING_POINT; break;
+        case PHASEABLE_O2:       mp = OXYGEN_MELTING_POINT; break;
+        default: return 0;
+    }
+
+    // Apply geology modifier for silicate
+    if (ps == PHASEABLE_SILICATE && cell) {
+        if (cell->geology_type == GEOLOGY_BEDROCK) {
+            mp = fixed_mul(mp, GEOLOGY_BEDROCK_MELT_MULT);
+        } else if (cell->geology_type == GEOLOGY_TOPSOIL) {
+            mp = fixed_mul(mp, GEOLOGY_TOPSOIL_MELT_MULT);
+        }
+    }
+    return mp;
+}
+
+fixed16_t get_phaseable_boiling_point(PhaseableSubstance ps) {
+    switch (ps) {
+        case PHASEABLE_H2O:      return WATER_BOILING_POINT;
+        case PHASEABLE_SILICATE: return SILICATE_BOILING_POINT;
+        case PHASEABLE_N2:       return NITROGEN_BOILING_POINT;
+        case PHASEABLE_O2:       return OXYGEN_BOILING_POINT;
+        default: return 0;
+    }
+}
+
+fixed16_t get_phaseable_latent_fusion(PhaseableSubstance ps) {
+    switch (ps) {
+        case PHASEABLE_H2O:      return LATENT_HEAT_H2O_FUSION;
+        case PHASEABLE_SILICATE: return LATENT_HEAT_SILICATE_FUSION;
+        case PHASEABLE_N2:       return LATENT_HEAT_N2_FUSION;
+        case PHASEABLE_O2:       return LATENT_HEAT_O2_FUSION;
+        default: return 0;
+    }
+}
+
+fixed16_t get_phaseable_latent_vaporization(PhaseableSubstance ps) {
+    switch (ps) {
+        case PHASEABLE_H2O:      return LATENT_HEAT_H2O_VAPORIZATION;
+        case PHASEABLE_SILICATE: return LATENT_HEAT_SILICATE_VAPORIZATION;
+        case PHASEABLE_N2:       return LATENT_HEAT_N2_VAPORIZATION;
+        case PHASEABLE_O2:       return LATENT_HEAT_O2_VAPORIZATION;
+        default: return 0;
+    }
+}
+
+fixed16_t get_phaseable_specific_heat(PhaseableSubstance ps, Phase phase) {
+    switch (ps) {
+        case PHASEABLE_H2O:
+            switch (phase) {
+                case PHASE_SOLID:  return SPECIFIC_HEAT_H2O_SOLID;
+                case PHASE_LIQUID: return SPECIFIC_HEAT_H2O_LIQUID;
+                case PHASE_GAS:    return SPECIFIC_HEAT_H2O_GAS;
+            }
+            break;
+        case PHASEABLE_SILICATE:
+            switch (phase) {
+                case PHASE_SOLID:  return SPECIFIC_HEAT_SILICATE_SOLID;
+                case PHASE_LIQUID: return SPECIFIC_HEAT_SILICATE_LIQUID;
+                case PHASE_GAS:    return SPECIFIC_HEAT_SILICATE_GAS;
+            }
+            break;
+        case PHASEABLE_N2:
+            switch (phase) {
+                case PHASE_SOLID:  return SPECIFIC_HEAT_N2_SOLID;
+                case PHASE_LIQUID: return SPECIFIC_HEAT_N2_LIQUID;
+                case PHASE_GAS:    return SPECIFIC_HEAT_N2_GAS;
+            }
+            break;
+        case PHASEABLE_O2:
+            switch (phase) {
+                case PHASE_SOLID:  return SPECIFIC_HEAT_O2_SOLID;
+                case PHASE_LIQUID: return SPECIFIC_HEAT_O2_LIQUID;
+                case PHASE_GAS:    return SPECIFIC_HEAT_O2_GAS;
+            }
+            break;
+        default:
+            break;
+    }
+    return FLOAT_TO_FIXED(1.0f);  // Default
+}
+
 // ============ CELL OPERATIONS ============
+
+// Get total mass of a phaseable substance (all 3 phases)
+fixed16_t cell_get_phaseable_total(const MatterCell *cell, PhaseableSubstance ps) {
+    if (ps >= PHASEABLE_COUNT) return 0;
+    const PhaseMass *pm = &cell->phase_mass[ps];
+    return pm->solid + pm->liquid + pm->gas;
+}
+
+// Get total H2O mass in a cell (all phases) - legacy compatibility
+fixed16_t cell_total_h2o(const MatterCell *cell) {
+    return cell_get_phaseable_total(cell, PHASEABLE_H2O);
+}
 
 void cell_add_mass(MatterCell *cell, Substance s, fixed16_t amount) {
     if (s <= SUBST_NONE || s >= SUBST_COUNT) return;
     if (amount <= 0) return;
 
-    cell->mass[s] += amount;
+    // Route to correct storage based on substance type
+    switch (s) {
+        case SUBST_H2O:
+            // Add as liquid by default
+            cell->phase_mass[PHASEABLE_H2O].liquid += amount;
+            break;
+        case SUBST_SILICATE:
+            // Add as solid by default
+            cell->phase_mass[PHASEABLE_SILICATE].solid += amount;
+            break;
+        case SUBST_NITROGEN:
+            // Add as gas by default (normal conditions)
+            cell->phase_mass[PHASEABLE_N2].gas += amount;
+            break;
+        case SUBST_OXYGEN:
+            // Add as gas by default
+            cell->phase_mass[PHASEABLE_O2].gas += amount;
+            break;
+        case SUBST_CO2:
+            cell->co2_gas += amount;
+            break;
+        case SUBST_SMOKE:
+            cell->smoke_gas += amount;
+            break;
+        case SUBST_ASH:
+            cell->ash_solid += amount;
+            break;
+        case SUBST_CELLULOSE:
+            cell->cellulose_solid += amount;
+            break;
+        default:
+            break;
+    }
 }
 
 fixed16_t cell_remove_mass(MatterCell *cell, Substance s, fixed16_t amount) {
     if (s <= SUBST_NONE || s >= SUBST_COUNT) return 0;
     if (amount <= 0) return 0;
 
-    fixed16_t available = cell->mass[s];
-    fixed16_t removed = (amount < available) ? amount : available;
-    cell->mass[s] -= removed;
-    return removed;
+    fixed16_t *target = NULL;
+    fixed16_t available = 0;
+
+    switch (s) {
+        case SUBST_H2O:
+            // Remove from liquid first, then steam, then ice
+            if (cell->phase_mass[PHASEABLE_H2O].liquid >= amount) {
+                cell->phase_mass[PHASEABLE_H2O].liquid -= amount;
+                return amount;
+            }
+            available = cell_get_phaseable_total(cell, PHASEABLE_H2O);
+            break;
+        case SUBST_SILICATE:
+            target = &cell->phase_mass[PHASEABLE_SILICATE].solid;
+            available = *target;
+            break;
+        case SUBST_NITROGEN:
+            target = &cell->phase_mass[PHASEABLE_N2].gas;
+            available = *target;
+            break;
+        case SUBST_OXYGEN:
+            target = &cell->phase_mass[PHASEABLE_O2].gas;
+            available = *target;
+            break;
+        case SUBST_CO2:
+            target = &cell->co2_gas;
+            available = *target;
+            break;
+        case SUBST_SMOKE:
+            target = &cell->smoke_gas;
+            available = *target;
+            break;
+        case SUBST_ASH:
+            target = &cell->ash_solid;
+            available = *target;
+            break;
+        case SUBST_CELLULOSE:
+            target = &cell->cellulose_solid;
+            available = *target;
+            break;
+        default:
+            return 0;
+    }
+
+    if (target) {
+        fixed16_t removed = (amount < available) ? amount : available;
+        *target -= removed;
+        return removed;
+    }
+    return 0;
 }
 
 void cell_add_energy(MatterCell *cell, fixed16_t joules) {
@@ -245,40 +422,41 @@ void cell_add_energy(MatterCell *cell, fixed16_t joules) {
 
 fixed16_t cell_get_mass(const MatterCell *cell, Substance s) {
     if (s <= SUBST_NONE || s >= SUBST_COUNT) return 0;
-    return cell->mass[s];
+
+    switch (s) {
+        case SUBST_H2O:      return cell_get_phaseable_total(cell, PHASEABLE_H2O);
+        case SUBST_SILICATE: return cell_get_phaseable_total(cell, PHASEABLE_SILICATE);
+        case SUBST_NITROGEN: return cell_get_phaseable_total(cell, PHASEABLE_N2);
+        case SUBST_OXYGEN:   return cell_get_phaseable_total(cell, PHASEABLE_O2);
+        case SUBST_CO2:      return cell->co2_gas;
+        case SUBST_SMOKE:    return cell->smoke_gas;
+        case SUBST_ASH:      return cell->ash_solid;
+        case SUBST_CELLULOSE: return cell->cellulose_solid;
+        default: return 0;
+    }
 }
 
 fixed16_t cell_get_fuel_mass(const MatterCell *cell) {
-    fixed16_t total = 0;
-    for (int s = 0; s < SUBST_COUNT; s++) {
-        if (SUBST_PROPS[s].is_fuel && cell->mass[s] > 0) {
-            total += cell->mass[s];
-        }
-    }
-    return total;
+    // Only cellulose is fuel
+    return cell->cellulose_solid;
 }
 
 bool cell_can_combust(const MatterCell *cell, Substance fuel) {
-    if (fuel <= SUBST_NONE || fuel >= SUBST_COUNT) return false;
+    if (fuel != SUBST_CELLULOSE) return false;
 
     const SubstanceProps *p = &SUBST_PROPS[fuel];
 
     if (!p->is_fuel) return false;
-    if (cell->mass[fuel] < FLOAT_TO_FIXED(0.01f)) return false;
+    if (cell->cellulose_solid < FLOAT_TO_FIXED(0.01f)) return false;
     if (cell->temperature < p->ignition_temp) return false;
 
-    // Need oxidizer (oxygen)
-    if (cell->mass[SUBST_OXYGEN] < FLOAT_TO_FIXED(0.001f)) return false;
+    // Need oxidizer (oxygen gas)
+    if (cell->phase_mass[PHASEABLE_O2].gas < FLOAT_TO_FIXED(0.001f)) return false;
 
     // Water suppression: liquid water prevents combustion (Theory 5)
-    if (cell->h2o_liquid > FLOAT_TO_FIXED(0.1f)) return false;
+    if (cell->phase_mass[PHASEABLE_H2O].liquid > FLOAT_TO_FIXED(0.1f)) return false;
 
     return true;
-}
-
-// Get total H2O mass in a cell (all phases)
-fixed16_t cell_total_h2o(const MatterCell *cell) {
-    return cell->h2o_ice + cell->h2o_liquid + cell->h2o_steam;
 }
 
 void cell_update_cache(MatterCell *cell) {
@@ -288,38 +466,62 @@ void cell_update_cache(MatterCell *cell) {
     cell->liquid_mass = 0;
     cell->gas_mass = 0;
 
-    // Process non-H2O substances (H2O is tracked separately by phase)
-    for (int s = 0; s < SUBST_COUNT; s++) {
-        if (s == SUBST_H2O) continue;  // Skip - handled separately
-        if (cell->mass[s] <= 0) continue;
+    // Process all phaseable substances with phase-specific specific heats
+    for (int ps = 0; ps < PHASEABLE_COUNT; ps++) {
+        const PhaseMass *pm = &cell->phase_mass[ps];
 
-        cell->total_mass += cell->mass[s];
-        cell->thermal_mass += fixed_mul(cell->mass[s],
-                                        SUBST_PROPS[s].specific_heat);
+        // Solid phase
+        if (pm->solid > 0) {
+            cell->total_mass += pm->solid;
+            cell->solid_mass += pm->solid;
+            cell->thermal_mass += fixed_mul(pm->solid,
+                get_phaseable_specific_heat(ps, PHASE_SOLID));
+        }
 
-        Phase p = substance_get_phase(s, cell->temperature);
-        switch (p) {
-            case PHASE_SOLID:  cell->solid_mass  += cell->mass[s]; break;
-            case PHASE_LIQUID: cell->liquid_mass += cell->mass[s]; break;
-            case PHASE_GAS:    cell->gas_mass    += cell->mass[s]; break;
+        // Liquid phase
+        if (pm->liquid > 0) {
+            cell->total_mass += pm->liquid;
+            cell->liquid_mass += pm->liquid;
+            cell->thermal_mass += fixed_mul(pm->liquid,
+                get_phaseable_specific_heat(ps, PHASE_LIQUID));
+        }
+
+        // Gas phase
+        if (pm->gas > 0) {
+            cell->total_mass += pm->gas;
+            cell->gas_mass += pm->gas;
+            cell->thermal_mass += fixed_mul(pm->gas,
+                get_phaseable_specific_heat(ps, PHASE_GAS));
         }
     }
 
-    // Add H2O phases with phase-specific specific heats
-    if (cell->h2o_ice > 0) {
-        cell->total_mass += cell->h2o_ice;
-        cell->solid_mass += cell->h2o_ice;
-        cell->thermal_mass += fixed_mul(cell->h2o_ice, SPECIFIC_HEAT_ICE);
+    // Process non-phaseable substances
+    // CO2 - always gas
+    if (cell->co2_gas > 0) {
+        cell->total_mass += cell->co2_gas;
+        cell->gas_mass += cell->co2_gas;
+        cell->thermal_mass += fixed_mul(cell->co2_gas, SUBST_PROPS[SUBST_CO2].specific_heat);
     }
-    if (cell->h2o_liquid > 0) {
-        cell->total_mass += cell->h2o_liquid;
-        cell->liquid_mass += cell->h2o_liquid;
-        cell->thermal_mass += fixed_mul(cell->h2o_liquid, SPECIFIC_HEAT_WATER);
+
+    // Smoke - always gas
+    if (cell->smoke_gas > 0) {
+        cell->total_mass += cell->smoke_gas;
+        cell->gas_mass += cell->smoke_gas;
+        cell->thermal_mass += fixed_mul(cell->smoke_gas, SUBST_PROPS[SUBST_SMOKE].specific_heat);
     }
-    if (cell->h2o_steam > 0) {
-        cell->total_mass += cell->h2o_steam;
-        cell->gas_mass += cell->h2o_steam;
-        cell->thermal_mass += fixed_mul(cell->h2o_steam, SPECIFIC_HEAT_STEAM);
+
+    // Ash - always solid
+    if (cell->ash_solid > 0) {
+        cell->total_mass += cell->ash_solid;
+        cell->solid_mass += cell->ash_solid;
+        cell->thermal_mass += fixed_mul(cell->ash_solid, SUBST_PROPS[SUBST_ASH].specific_heat);
+    }
+
+    // Cellulose - always solid
+    if (cell->cellulose_solid > 0) {
+        cell->total_mass += cell->cellulose_solid;
+        cell->solid_mass += cell->cellulose_solid;
+        cell->thermal_mass += fixed_mul(cell->cellulose_solid, SUBST_PROPS[SUBST_CELLULOSE].specific_heat);
     }
 
     // Calculate temperature: T = E / thermal_mass
@@ -335,10 +537,31 @@ void cell_update_cache(MatterCell *cell) {
         cell->energy = 0;  // At absolute zero, no thermal energy
     }
     // NO upper clamp - temperatures can be arbitrarily high
+
+    // Update geology type based on lava presence
+    cell_update_geology(cell);
 }
 
 fixed16_t cell_get_temperature(const MatterCell *cell) {
     return cell->temperature;
+}
+
+// Get effective melting point for silicate based on geology type
+fixed16_t cell_get_silicate_melting_point(const MatterCell *cell) {
+    return get_phaseable_melting_point(PHASEABLE_SILICATE, cell);
+}
+
+// Update geology type based on phase state (lava detection)
+void cell_update_geology(MatterCell *cell) {
+    // If there's significant liquid silicate, it's lava
+    if (cell->phase_mass[PHASEABLE_SILICATE].liquid > FLOAT_TO_FIXED(0.1f)) {
+        cell->geology_type = GEOLOGY_LAVA;
+    }
+    // If lava has solidified, convert to rock
+    else if (cell->geology_type == GEOLOGY_LAVA &&
+             cell->phase_mass[PHASEABLE_SILICATE].liquid < FLOAT_TO_FIXED(0.01f)) {
+        cell->geology_type = GEOLOGY_ROCK;  // Cooled lava becomes rock
+    }
 }
 
 // ============ HEAT CONDUCTION ============
@@ -431,8 +654,8 @@ void matter_process_combustion(MatterState *state) {
             // Check cellulose combustion
             if (!cell_can_combust(cell, SUBST_CELLULOSE)) continue;
 
-            fixed16_t fuel = cell->mass[SUBST_CELLULOSE];
-            fixed16_t o2 = cell->mass[SUBST_OXYGEN];
+            fixed16_t fuel = cell->cellulose_solid;
+            fixed16_t o2 = CELL_O2_GAS(cell);
 
             // Burn rate: fast enough to consume fuel before fire goes out
             // At 30Hz, 0.05 kg/tick = 1.5 kg/sec (fire consumes fuel in 2-7 ticks)
@@ -449,15 +672,15 @@ void matter_process_combustion(MatterState *state) {
             if (actual_burn <= 0) continue;
 
             // Consume reactants
-            cell->mass[SUBST_CELLULOSE] -= actual_burn;
-            cell->mass[SUBST_OXYGEN] -= fixed_mul(actual_burn, FLOAT_TO_FIXED(0.33f));
+            cell->cellulose_solid -= actual_burn;
+            CELL_O2_GAS(cell) -= fixed_mul(actual_burn, FLOAT_TO_FIXED(0.33f));
 
             // Produce products
             // C6H10O5 + 6O2 → 6CO2 + 5H2O (simplified ratios)
-            cell->mass[SUBST_CO2] += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.8f));
-            cell->mass[SUBST_H2O] += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.1f));
-            cell->mass[SUBST_ASH] += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.03f));
-            cell->mass[SUBST_SMOKE] += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.07f));
+            cell->co2_gas += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.8f));
+            CELL_H2O_STEAM(cell) += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.1f));  // Steam from combustion
+            cell->ash_solid += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.03f));
+            cell->smoke_gas += fixed_mul(actual_burn, FLOAT_TO_FIXED(0.07f));
 
             // Release heat
             fixed16_t heat = fixed_mul(actual_burn,
@@ -471,16 +694,26 @@ void matter_process_combustion(MatterState *state) {
 
 // ============ GAS DIFFUSION ============
 
+// Helper to get pointer to a gas field in cell
+static fixed16_t* cell_get_gas_ptr(MatterCell *cell, int gas_index) {
+    switch (gas_index) {
+        case 0: return &cell->phase_mass[PHASEABLE_N2].gas;
+        case 1: return &cell->phase_mass[PHASEABLE_O2].gas;
+        case 2: return &cell->co2_gas;
+        case 3: return &cell->smoke_gas;
+        default: return NULL;
+    }
+}
+
 void matter_diffuse_gases(MatterState *state) {
-    // Temporary array for mass changes
-    fixed16_t mass_delta[MATTER_RES][MATTER_RES][SUBST_COUNT];
+    // Temporary array for mass changes (4 gas types)
+    static fixed16_t mass_delta[MATTER_RES][MATTER_RES][4];
     memset(mass_delta, 0, sizeof(mass_delta));
 
     fixed16_t diffusion_rate = FLOAT_TO_FIXED(0.1f);
 
-    // Only diffuse gas substances
-    Substance gases[] = {SUBST_NITROGEN, SUBST_OXYGEN, SUBST_CO2, SUBST_SMOKE};
-    int num_gases = 4;
+    // Gas indices: 0=N2, 1=O2, 2=CO2, 3=Smoke
+    const int num_gases = 4;
 
     for (int x = 1; x < MATTER_RES - 1; x++) {
         for (int z = 1; z < MATTER_RES - 1; z++) {
@@ -490,20 +723,23 @@ void matter_diffuse_gases(MatterState *state) {
             int dz[4] = {0, 0, -1, 1};
 
             for (int g = 0; g < num_gases; g++) {
-                Substance s = gases[g];
-                fixed16_t my_mass = cell->mass[s];
+                fixed16_t *my_ptr = cell_get_gas_ptr(cell, g);
+                if (!my_ptr) continue;
+                fixed16_t my_mass = *my_ptr;
 
                 for (int d = 0; d < 4; d++) {
                     int nx = x + dx[d];
                     int nz = z + dz[d];
                     MatterCell *neighbor = &state->cells[nx][nz];
-                    fixed16_t their_mass = neighbor->mass[s];
+                    fixed16_t *their_ptr = cell_get_gas_ptr(neighbor, g);
+                    if (!their_ptr) continue;
+                    fixed16_t their_mass = *their_ptr;
 
                     // Diffuse toward equilibrium
                     fixed16_t diff = their_mass - my_mass;
                     fixed16_t transfer = fixed_mul(diff, diffusion_rate);
 
-                    mass_delta[x][z][s] += transfer;
+                    mass_delta[x][z][g] += transfer;
                 }
             }
         }
@@ -512,17 +748,52 @@ void matter_diffuse_gases(MatterState *state) {
     // Apply mass changes
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
-            for (int s = 0; s < SUBST_COUNT; s++) {
-                state->cells[x][z].mass[s] += mass_delta[x][z][s];
-                if (state->cells[x][z].mass[s] < 0) {
-                    state->cells[x][z].mass[s] = 0;
-                }
+            for (int g = 0; g < num_gases; g++) {
+                fixed16_t *ptr = cell_get_gas_ptr(&state->cells[x][z], g);
+                if (!ptr) continue;
+                *ptr += mass_delta[x][z][g];
+                if (*ptr < 0) *ptr = 0;
             }
         }
     }
 }
 
 // ============ INITIALIZATION ============
+
+// Initialize geology type based on terrain height
+void matter_init_geology(MatterState *state, const int terrain[MATTER_RES][MATTER_RES]) {
+    // Find max terrain height for depth calculation
+    int max_height = 0;
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            if (terrain[x][z] > max_height) max_height = terrain[x][z];
+        }
+    }
+
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            MatterCell *cell = &state->cells[x][z];
+            int height = terrain[x][z];
+
+            // Depth from surface (for geology layers)
+            cell->depth_from_surface = 0;  // Surface cell
+
+            // Geology type based on terrain height
+            // Higher terrain = older rock = bedrock
+            // Mid terrain = rock
+            // Lower terrain = topsoil (more weathering, organic matter)
+            if (height >= 10) {
+                cell->geology_type = GEOLOGY_BEDROCK;
+            } else if (height >= 5) {
+                cell->geology_type = GEOLOGY_ROCK;
+            } else if (height >= 1) {
+                cell->geology_type = GEOLOGY_TOPSOIL;
+            } else {
+                cell->geology_type = GEOLOGY_NONE;  // Below ground level
+            }
+        }
+    }
+}
 
 void matter_init(MatterState *state, const int terrain[MATTER_RES][MATTER_RES], uint32_t seed) {
     memset(state, 0, sizeof(MatterState));
@@ -549,12 +820,12 @@ void matter_init(MatterState *state, const int terrain[MATTER_RES][MATTER_RES], 
             cell->terrain_height = height;
             cell->light_level = FIXED_ONE;
 
-            // Ground: silicate (non-porous)
-            cell->mass[SUBST_SILICATE] = FLOAT_TO_FIXED(1.0f);
+            // Ground: silicate (solid phase)
+            CELL_SILICATE_SOLID(cell) = FLOAT_TO_FIXED(1.0f);
 
             // Atmosphere: N2 78%, O2 21% (normalized to small amount per cell)
-            cell->mass[SUBST_NITROGEN] = FLOAT_TO_FIXED(0.078f);
-            cell->mass[SUBST_OXYGEN] = FLOAT_TO_FIXED(0.021f);
+            CELL_N2_GAS(cell) = FLOAT_TO_FIXED(0.078f);
+            CELL_O2_GAS(cell) = FLOAT_TO_FIXED(0.021f);
 
             // Vegetation: cellulose (sparse, noise-based)
             float veg_value = noise_fbm2d((float)x, (float)z, &veg_noise);
@@ -565,7 +836,7 @@ void matter_init(MatterState *state, const int terrain[MATTER_RES][MATTER_RES], 
             if (height > 2 && height < 10 && veg_density > threshold) {
                 float patch_strength = (veg_density - threshold) / (1.0f - threshold);
                 fixed16_t cellulose_amount = FLOAT_TO_FIXED(0.1f + 0.25f * patch_strength);
-                cell->mass[SUBST_CELLULOSE] = cellulose_amount;
+                cell->cellulose_solid = cellulose_amount;
             }
 
             // Set initial temperature to ambient (20°C = 293K)
@@ -574,6 +845,9 @@ void matter_init(MatterState *state, const int terrain[MATTER_RES][MATTER_RES], 
             cell->temperature = AMBIENT_TEMP;
         }
     }
+
+    // Initialize geology layers based on terrain
+    matter_init_geology(state, terrain);
 
     state->tick = 0;
     state->accumulator = 0.0f;
@@ -626,8 +900,8 @@ void matter_step(MatterState *state) {
         }
     }
 
-    // O2 displacement by water (must come before combustion check)
-    matter_process_o2_displacement(state);
+    // Note: O2 is NOT displaced by water in hermetic simulation
+    // Combustion check handles water suppression directly (checks h2o_liquid)
 
     // Heat conduction
     matter_conduct_heat(state);
@@ -636,29 +910,14 @@ void matter_step(MatterState *state) {
     matter_process_combustion(state);
 
     // Process phase transitions (evaporation, condensation, melting, freezing)
+    // This handles ALL phaseable substances: H2O, Silicate, N2, O2
     matter_process_phase_transitions(state);
 
-    // Replenish atmospheric gases (we're outdoors, unlimited air supply)
-    // Only replenish cells not submerged in water
-    fixed16_t ambient_o2 = FLOAT_TO_FIXED(0.021f);
-    fixed16_t ambient_n2 = FLOAT_TO_FIXED(0.078f);
-    for (int x = 0; x < MATTER_RES; x++) {
-        for (int z = 0; z < MATTER_RES; z++) {
-            MatterCell *cell = &state->cells[x][z];
+    // Flow liquids (water flows fast, lava flows slow with viscosity)
+    matter_flow_liquids(state);
 
-            // Skip replenishment for submerged cells (O2 is displaced by water)
-            if (cell->h2o_liquid > FLOAT_TO_FIXED(0.5f)) continue;
-
-            // Slowly replenish toward ambient (10% per tick)
-            fixed16_t o2_diff = ambient_o2 - cell->mass[SUBST_OXYGEN];
-            fixed16_t n2_diff = ambient_n2 - cell->mass[SUBST_NITROGEN];
-            cell->mass[SUBST_OXYGEN] += o2_diff / 10;
-            cell->mass[SUBST_NITROGEN] += n2_diff / 10;
-        }
-    }
-
-    // Optional: gas diffusion (for smoke spread)
-    // matter_diffuse_gases(state);
+    // Note: No atmospheric replenishment - hermetic simulation
+    // Gases are conserved; O2 consumed by fire is not replaced
 
     // Update caches again after reactions
     for (int x = 0; x < MATTER_RES; x++) {
@@ -716,12 +975,29 @@ void matter_add_water_at(MatterState *state, float world_x, float world_z,
 
     MatterCell *cell = matter_get_cell(state, cx, cz);
     if (cell) {
+        // DEBUG: capture before state
+        float old_temp = FIXED_TO_FLOAT(cell->temperature);
+        float old_liquid = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
+
         // Add water as liquid phase (at current temperature)
-        cell->h2o_liquid += mass;
+        CELL_H2O_LIQUID(cell) += mass;
 
         // Add thermal energy for the new water (at ambient temperature)
-        fixed16_t water_thermal = fixed_mul(mass, SPECIFIC_HEAT_WATER);
+        fixed16_t water_thermal = fixed_mul(mass, SPECIFIC_HEAT_H2O_LIQUID);
         cell->energy += fixed_mul(water_thermal, AMBIENT_TEMP);
+
+        // CRITICAL: Update cache after adding water
+        cell_update_cache(cell);
+
+        // DEBUG: Log water addition
+        static int add_counter = 0;
+        if (add_counter++ % 60 == 0) {
+            float new_temp = FIXED_TO_FLOAT(cell->temperature);
+            float new_liquid = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
+            TraceLog(LOG_INFO, "ADD_WATER [%d,%d]: mass=%.2f, liquid %.2f->%.2f, temp %.1fC->%.1fC",
+                     cx, cz, FIXED_TO_FLOAT(mass), old_liquid, new_liquid,
+                     old_temp - 273.15f, new_temp - 273.15f);
+        }
     }
 }
 
@@ -746,7 +1022,7 @@ fixed16_t matter_total_mass(const MatterState *state, Substance s) {
     fixed16_t total = 0;
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
-            total += state->cells[x][z].mass[s];
+            total += cell_get_mass(&state->cells[x][z], s);
         }
     }
     return total;
@@ -770,6 +1046,8 @@ uint32_t matter_checksum(const MatterState *state) {
 void matter_sync_from_water(MatterState *matter, const struct WaterState *water) {
     if (!matter || !water) return;
 
+    static int debug_counter = 0;
+
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
             // Get water depth from water simulation
@@ -780,22 +1058,42 @@ void matter_sync_from_water(MatterState *matter, const struct WaterState *water)
             fixed16_t new_liquid = fixed_mul(depth, WATER_MASS_PER_DEPTH);
 
             MatterCell *cell = &matter->cells[x][z];
-            fixed16_t old_liquid = cell->h2o_liquid;
+            fixed16_t old_liquid = CELL_H2O_LIQUID(cell);
 
             if (new_liquid != old_liquid) {
                 // Adjust energy for mass change
                 fixed16_t delta = new_liquid - old_liquid;
+
+                // DEBUG: Log significant water changes
+                float delta_f = FIXED_TO_FLOAT(delta);
+                float old_temp = FIXED_TO_FLOAT(cell->temperature);
+                float old_energy = FIXED_TO_FLOAT(cell->energy);
+                float old_thermal = FIXED_TO_FLOAT(cell->thermal_mass);
+
                 if (delta > 0) {
                     // Water added - bring in at ambient temperature
-                    fixed16_t delta_thermal = fixed_mul(delta, SPECIFIC_HEAT_WATER);
+                    fixed16_t delta_thermal = fixed_mul(delta, SPECIFIC_HEAT_H2O_LIQUID);
                     cell->energy += fixed_mul(delta_thermal, AMBIENT_TEMP);
                 } else {
                     // Water removed - energy leaves with water
-                    fixed16_t delta_thermal = fixed_mul(-delta, SPECIFIC_HEAT_WATER);
+                    fixed16_t delta_thermal = fixed_mul(-delta, SPECIFIC_HEAT_H2O_LIQUID);
                     cell->energy -= fixed_mul(delta_thermal, cell->temperature);
                     if (cell->energy < 0) cell->energy = 0;
                 }
-                cell->h2o_liquid = new_liquid;
+                CELL_H2O_LIQUID(cell) = new_liquid;
+
+                // CRITICAL: Update cache to recalculate thermal mass and temperature
+                cell_update_cache(cell);
+
+                // DEBUG: Log after update
+                if (debug_counter++ % 60 == 0 && (delta_f > 0.5f || delta_f < -0.5f)) {
+                    float new_temp = FIXED_TO_FLOAT(cell->temperature);
+                    float new_energy = FIXED_TO_FLOAT(cell->energy);
+                    float new_thermal = FIXED_TO_FLOAT(cell->thermal_mass);
+                    TraceLog(LOG_INFO, "SYNC [%d,%d]: delta=%.2f, temp %.1f->%.1f, energy %.1f->%.1f, thermal %.1f->%.1f",
+                             x, z, delta_f, old_temp - 273.15f, new_temp - 273.15f,
+                             old_energy, new_energy, old_thermal, new_thermal);
+                }
             }
         }
     }
@@ -806,111 +1104,268 @@ void matter_sync_to_water(const MatterState *matter, struct WaterState *water) {
 
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
-            // Convert liquid water mass back to depth
-            fixed16_t liquid = matter->cells[x][z].h2o_liquid;
-            fixed16_t depth = fixed_div(liquid, WATER_MASS_PER_DEPTH);
-            water->cells[x][z].water_height = depth;
+            const MatterCell *cell = &matter->cells[x][z];
+
+            // Ice acts as solid terrain - blocks water flow
+            // Ice is synced to ice_height (acts like additional terrain)
+            // Only liquid water goes into water_height (can flow)
+            fixed16_t ice_mass = CELL_H2O_ICE(cell);
+            fixed16_t liquid_mass = CELL_H2O_LIQUID(cell);
+
+            // Convert mass to depth
+            fixed16_t ice_depth = fixed_div(ice_mass, WATER_MASS_PER_DEPTH);
+            fixed16_t liquid_depth = fixed_div(liquid_mass, WATER_MASS_PER_DEPTH);
+
+            // Ice raises the effective terrain height - water cannot flow into it
+            water->ice_height[x][z] = ice_depth;
+            // Only liquid water can flow
+            water->cells[x][z].water_height = liquid_depth;
         }
     }
 }
 
 // ============ PHASE TRANSITIONS ============
 
+// Process phase transition for a single phaseable substance in a cell
+void cell_process_phase_transition(MatterCell *cell, PhaseableSubstance ps) {
+    PhaseMass *pm = &cell->phase_mass[ps];
+
+    // Get substance properties (with geology modifier for silicate melting)
+    fixed16_t mp = get_phaseable_melting_point(ps, cell);
+    fixed16_t bp = get_phaseable_boiling_point(ps);
+    fixed16_t lh_fusion = get_phaseable_latent_fusion(ps);
+    fixed16_t lh_vapor = get_phaseable_latent_vaporization(ps);
+
+    // Rate limits to prevent instability
+    fixed16_t rate = PHASE_TRANSITION_RATE;  // 0.1 g/tick
+
+    // === MELTING (solid → liquid above melting point) ===
+    if (cell->temperature >= mp && pm->solid > 0) {
+        fixed16_t excess_temp = cell->temperature - mp;
+        if (excess_temp > 0) {
+            // Calculate max melt based on available excess energy
+            fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
+            fixed16_t max_by_energy = fixed_div(excess_energy, lh_fusion);
+            fixed16_t max_by_mass = pm->solid;
+
+            fixed16_t melt = rate;
+            if (melt > max_by_energy) melt = max_by_energy;
+            if (melt > max_by_mass) melt = max_by_mass;
+
+            if (melt > 0) {
+                pm->solid -= melt;
+                pm->liquid += melt;
+                cell->energy -= fixed_mul(melt, lh_fusion);  // Consume latent heat
+            }
+        }
+    }
+
+    // === FREEZING (liquid → solid below melting point) ===
+    if (cell->temperature < mp && pm->liquid > 0) {
+        fixed16_t undercool = mp - cell->temperature;
+        // Faster freezing when colder
+        fixed16_t freeze = rate;
+        if (undercool > FLOAT_TO_FIXED(10.0f)) {
+            freeze = fixed_mul(rate, FLOAT_TO_FIXED(2.0f));  // Double rate for strong undercooling
+        }
+        if (freeze > pm->liquid) freeze = pm->liquid;
+
+        if (freeze > 0) {
+            pm->liquid -= freeze;
+            pm->solid += freeze;
+            cell->energy += fixed_mul(freeze, lh_fusion);  // Release latent heat
+        }
+    }
+
+    // === BOILING/EVAPORATION (liquid → gas above boiling point) ===
+    if (cell->temperature >= bp && pm->liquid > 0) {
+        fixed16_t excess_temp = cell->temperature - bp;
+        if (excess_temp > 0) {
+            fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
+            fixed16_t max_by_energy = fixed_div(excess_energy, lh_vapor);
+            fixed16_t max_by_mass = pm->liquid;
+
+            fixed16_t evap = rate;
+            if (evap > max_by_energy) evap = max_by_energy;
+            if (evap > max_by_mass) evap = max_by_mass;
+
+            if (evap > 0) {
+                pm->liquid -= evap;
+                pm->gas += evap;
+                cell->energy -= fixed_mul(evap, lh_vapor);  // Consume latent heat
+            }
+        }
+    }
+
+    // === CONDENSATION (gas → liquid below boiling point) ===
+    if (cell->temperature < bp && pm->gas > 0) {
+        fixed16_t undercool = bp - cell->temperature;
+        fixed16_t condense = rate;
+        if (undercool > FLOAT_TO_FIXED(10.0f)) {
+            condense = fixed_mul(rate, FLOAT_TO_FIXED(2.0f));
+        }
+        if (condense > pm->gas) condense = pm->gas;
+
+        if (condense > 0) {
+            pm->gas -= condense;
+            pm->liquid += condense;
+            cell->energy += fixed_mul(condense, lh_vapor);  // Release latent heat
+        }
+    }
+
+    // === SUBLIMATION (solid → gas, skipping liquid) ===
+    // Occurs when temperature jumps past both transition points
+    // or for substances where liquid range is very narrow
+    if (cell->temperature >= bp && pm->solid > 0 && mp >= bp - FLOAT_TO_FIXED(20.0f)) {
+        // Direct sublimation for cryogenic substances with narrow liquid range
+        fixed16_t excess_temp = cell->temperature - bp;
+        if (excess_temp > 0) {
+            fixed16_t total_latent = lh_fusion + lh_vapor;
+            fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
+            fixed16_t max_by_energy = fixed_div(excess_energy, total_latent);
+            fixed16_t max_by_mass = pm->solid;
+
+            fixed16_t sublime = rate;
+            if (sublime > max_by_energy) sublime = max_by_energy;
+            if (sublime > max_by_mass) sublime = max_by_mass;
+
+            if (sublime > 0) {
+                pm->solid -= sublime;
+                pm->gas += sublime;
+                cell->energy -= fixed_mul(sublime, total_latent);
+            }
+        }
+    }
+
+    // === DEPOSITION (gas → solid, skipping liquid) ===
+    if (cell->temperature < mp && pm->gas > 0) {
+        fixed16_t undercool = mp - cell->temperature;
+        if (undercool > FLOAT_TO_FIXED(10.0f)) {
+            fixed16_t total_latent = lh_fusion + lh_vapor;
+            fixed16_t deposit = rate;
+            if (deposit > pm->gas) deposit = pm->gas;
+
+            if (deposit > 0) {
+                pm->gas -= deposit;
+                pm->solid += deposit;
+                cell->energy += fixed_mul(deposit, total_latent);
+            }
+        }
+    }
+}
+
+// Process phase transitions for ALL phaseable substances in all cells
 void matter_process_phase_transitions(MatterState *state) {
-    fixed16_t evap_rate = FLOAT_TO_FIXED(0.01f);  // g/tick max evaporation
-    fixed16_t condense_rate = FLOAT_TO_FIXED(0.01f);
-    fixed16_t melt_rate = FLOAT_TO_FIXED(0.01f);
-    fixed16_t freeze_rate = FLOAT_TO_FIXED(0.01f);
-
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
             MatterCell *cell = &state->cells[x][z];
 
-            // === EVAPORATION (liquid → steam at boiling point) ===
-            if (cell->temperature >= WATER_BOILING_POINT && cell->h2o_liquid > 0) {
-                // Calculate excess energy above boiling
-                fixed16_t excess_temp = cell->temperature - WATER_BOILING_POINT;
-                if (excess_temp > 0) {
-                    // How much can we evaporate with available excess energy?
-                    fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
-                    fixed16_t max_by_energy = fixed_div(excess_energy, LATENT_HEAT_VAPORIZATION);
-                    fixed16_t max_by_mass = cell->h2o_liquid;
-
-                    fixed16_t evap = evap_rate;
-                    if (evap > max_by_energy) evap = max_by_energy;
-                    if (evap > max_by_mass) evap = max_by_mass;
-                    if (evap <= 0) continue;
-
-                    // Transfer mass (conservation of mass)
-                    cell->h2o_liquid -= evap;
-                    cell->h2o_steam += evap;
-
-                    // Consume latent heat (conservation of energy)
-                    cell->energy -= fixed_mul(evap, LATENT_HEAT_VAPORIZATION);
-                }
-            }
-
-            // === CONDENSATION (steam → liquid below boiling point) ===
-            if (cell->temperature < WATER_BOILING_POINT && cell->h2o_steam > 0) {
-                fixed16_t condense = condense_rate;
-                if (condense > cell->h2o_steam) condense = cell->h2o_steam;
-
-                // Transfer mass
-                cell->h2o_steam -= condense;
-                cell->h2o_liquid += condense;
-
-                // Release latent heat
-                cell->energy += fixed_mul(condense, LATENT_HEAT_VAPORIZATION);
-            }
-
-            // === MELTING (ice → liquid at melting point) ===
-            if (cell->temperature >= WATER_MELTING_POINT && cell->h2o_ice > 0) {
-                fixed16_t excess_temp = cell->temperature - WATER_MELTING_POINT;
-                if (excess_temp > 0) {
-                    fixed16_t excess_energy = fixed_mul(excess_temp, cell->thermal_mass);
-                    fixed16_t max_by_energy = fixed_div(excess_energy, LATENT_HEAT_FUSION);
-                    fixed16_t max_by_mass = cell->h2o_ice;
-
-                    fixed16_t melt = melt_rate;
-                    if (melt > max_by_energy) melt = max_by_energy;
-                    if (melt > max_by_mass) melt = max_by_mass;
-                    if (melt <= 0) continue;
-
-                    cell->h2o_ice -= melt;
-                    cell->h2o_liquid += melt;
-                    cell->energy -= fixed_mul(melt, LATENT_HEAT_FUSION);
-                }
-            }
-
-            // === FREEZING (liquid → ice below melting point) ===
-            if (cell->temperature < WATER_MELTING_POINT && cell->h2o_liquid > 0) {
-                fixed16_t freeze = freeze_rate;
-                if (freeze > cell->h2o_liquid) freeze = cell->h2o_liquid;
-
-                cell->h2o_liquid -= freeze;
-                cell->h2o_ice += freeze;
-                cell->energy += fixed_mul(freeze, LATENT_HEAT_FUSION);
+            // Process all phaseable substances
+            for (int ps = 0; ps < PHASEABLE_COUNT; ps++) {
+                cell_process_phase_transition(cell, (PhaseableSubstance)ps);
             }
         }
     }
 }
 
-// ============ O2 DISPLACEMENT BY WATER ============
+// ============ LIQUID FLOW ============
+// Flow liquids (water and lava) based on terrain slope and viscosity
 
-static void matter_process_o2_displacement(MatterState *state) {
+// Viscosity constants (relative to water = 1.0)
+#define WATER_VISCOSITY     FLOAT_TO_FIXED(1.0f)
+#define LAVA_VISCOSITY      FLOAT_TO_FIXED(10000.0f)   // Lava flows MUCH slower
+
+// Helper: get flow rate based on viscosity (inverse relationship)
+static fixed16_t get_flow_rate(fixed16_t viscosity) {
+    // Base flow rate for water
+    fixed16_t base_rate = FLOAT_TO_FIXED(0.1f);
+    // Divide by viscosity to slow down high-viscosity liquids
+    return fixed_div(base_rate, viscosity);
+}
+
+// Flow a specific liquid type between cells
+static void flow_liquid_type(MatterState *state, PhaseableSubstance ps, fixed16_t viscosity) {
+    // Temporary delta array for this liquid
+    static fixed16_t liquid_delta[MATTER_RES][MATTER_RES];
+    memset(liquid_delta, 0, sizeof(liquid_delta));
+
+    fixed16_t flow_rate = get_flow_rate(viscosity);
+    fixed16_t min_liquid = FLOAT_TO_FIXED(0.01f);  // Minimum to flow
+
+    // Neighbor offsets
+    const int dx[4] = {-1, 1, 0, 0};
+    const int dz[4] = {0, 0, -1, 1};
+
+    for (int x = 1; x < MATTER_RES - 1; x++) {
+        for (int z = 1; z < MATTER_RES - 1; z++) {
+            MatterCell *cell = &state->cells[x][z];
+            fixed16_t my_liquid = cell->phase_mass[ps].liquid;
+
+            if (my_liquid < min_liquid) continue;
+
+            // Surface height = terrain + liquid depth
+            fixed16_t my_surface = INT_TO_FIXED(cell->terrain_height) + my_liquid;
+
+            for (int d = 0; d < 4; d++) {
+                int nx = x + dx[d];
+                int nz = z + dz[d];
+                MatterCell *neighbor = &state->cells[nx][nz];
+
+                // Neighbor surface height
+                fixed16_t their_liquid = neighbor->phase_mass[ps].liquid;
+                fixed16_t their_surface = INT_TO_FIXED(neighbor->terrain_height) + their_liquid;
+
+                // Flow from higher to lower surface
+                fixed16_t surface_diff = my_surface - their_surface;
+                if (surface_diff > FLOAT_TO_FIXED(0.01f)) {
+                    // Calculate flow amount
+                    fixed16_t flow = fixed_mul(surface_diff, flow_rate);
+
+                    // Limit by available liquid (max 25% per neighbor)
+                    fixed16_t max_flow = my_liquid / 4;
+                    if (flow > max_flow) flow = max_flow;
+
+                    // Accumulate deltas (will be applied after all calculations)
+                    liquid_delta[x][z] -= flow;
+                    liquid_delta[nx][nz] += flow;
+                }
+            }
+        }
+    }
+
+    // Apply deltas
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
-            MatterCell *cell = &state->cells[x][z];
-
-            // Calculate submersion factor (0 = dry, 1 = fully submerged)
-            fixed16_t submersion = fixed_div(cell->h2o_liquid, FLOAT_TO_FIXED(1.0f));
-            if (submersion > FIXED_ONE) submersion = FIXED_ONE;
-            if (submersion < 0) submersion = 0;
-
-            // O2 displaced proportionally by water
-            fixed16_t air_fraction = FIXED_ONE - submersion;
-            fixed16_t ambient_o2 = FLOAT_TO_FIXED(0.021f);
-            cell->mass[SUBST_OXYGEN] = fixed_mul(ambient_o2, air_fraction);
+            state->cells[x][z].phase_mass[ps].liquid += liquid_delta[x][z];
+            if (state->cells[x][z].phase_mass[ps].liquid < 0) {
+                state->cells[x][z].phase_mass[ps].liquid = 0;
+            }
         }
     }
 }
+
+// Flow all liquid types with appropriate viscosities
+void matter_flow_liquids(MatterState *state) {
+    // Flow water (low viscosity - fast)
+    flow_liquid_type(state, PHASEABLE_H2O, WATER_VISCOSITY);
+
+    // Flow lava (high viscosity - slow)
+    // Only flow if there's actually liquid silicate (lava) in the system
+    bool has_lava = false;
+    for (int x = 0; x < MATTER_RES && !has_lava; x++) {
+        for (int z = 0; z < MATTER_RES && !has_lava; z++) {
+            if (state->cells[x][z].phase_mass[PHASEABLE_SILICATE].liquid > FLOAT_TO_FIXED(0.01f)) {
+                has_lava = true;
+            }
+        }
+    }
+    if (has_lava) {
+        flow_liquid_type(state, PHASEABLE_SILICATE, LAVA_VISCOSITY);
+    }
+
+    // Flow cryogenic liquids (N2, O2) - similar viscosity to water
+    // These would only exist in very cold environments
+    flow_liquid_type(state, PHASEABLE_N2, WATER_VISCOSITY);
+    flow_liquid_type(state, PHASEABLE_O2, WATER_VISCOSITY);
+}
+

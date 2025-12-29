@@ -88,6 +88,36 @@ test: $(BUILD_DIR) $(TEST_TARGETS) test-growth
 $(BUILD_DIR)/test_%: $(TEST_DIR)/test_%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
+# Specific rules for tests that need source file dependencies
+
+# Matter system test (needs matter.c, noise.c, water.c)
+$(BUILD_DIR)/test_matter_system: $(TEST_DIR)/test_matter_system.c $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c $(SRC_DIR)/water.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Matter integration test (needs matter.c, noise.c, water.c)
+$(BUILD_DIR)/test_matter_integration: $(TEST_DIR)/test_matter_integration.c $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c $(SRC_DIR)/water.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Water-matter integration test
+$(BUILD_DIR)/test_water_matter_integration: $(TEST_DIR)/test_water_matter_integration.c $(SRC_DIR)/matter.c $(SRC_DIR)/water.c $(SRC_DIR)/noise.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Noise test (needs noise.c)
+$(BUILD_DIR)/test_noise: $(TEST_DIR)/test_noise.c $(SRC_DIR)/noise.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Octree test (needs octree.c)
+$(BUILD_DIR)/test_octree: $(TEST_DIR)/test_octree.c $(SRC_DIR)/octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Terrain test (needs terrain.c, tree.c)
+$(BUILD_DIR)/test_terrain: $(TEST_DIR)/test_terrain.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Tree test (needs tree.c)
+$(BUILD_DIR)/test_tree: $(TEST_DIR)/test_tree.c $(SRC_DIR)/tree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
 # Growth distribution test (uses tree module)
 test-growth: $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DTEST_BUILD $(SRC_DIR)/test_growth.c $(SRC_DIR)/tree.c -o $(BUILD_DIR)/test_growth $(LDFLAGS)
@@ -115,7 +145,7 @@ test-matter-integration: $(BUILD_DIR)
 
 # Matter system tests (full engine with designed maps)
 # Requires linking with actual matter.c and dependencies
-MATTER_TEST_DEPS = $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c
+MATTER_TEST_DEPS = $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c $(SRC_DIR)/water.c
 test-matter-system: $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(TEST_DIR)/test_matter_system.c $(MATTER_TEST_DEPS) -o $(BUILD_DIR)/test_matter_system $(LDFLAGS)
 	./$(BUILD_DIR)/test_matter_system

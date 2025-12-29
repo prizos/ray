@@ -6,10 +6,9 @@
  *
  * Theories tested:
  * 1. Hot cells cooled by water
- * 2. Fire extinguished by flooding
+ * 2. Fire extinguished by flooding (water suppresses combustion directly)
  * 3. Evaporation plateau at boiling point
- * 4. O2 displacement by water
- * 5. Energy conservation during phase transitions
+ * 4. Mass/energy conservation (hermetic simulation)
  */
 
 #include "test_common.h"
@@ -107,14 +106,6 @@ static void cell_update_thermal(IntCell *c) {
             c->energy = 0;
         }
     }
-}
-
-static fixed16_t grid_total_energy(const IntGrid *g) {
-    fixed16_t total = 0;
-    for (int i = 0; i < g->width * g->height; i++) {
-        total += g->cells[i].energy;
-    }
-    return total;
 }
 
 static fixed16_t grid_total_h2o(const IntGrid *g) {
@@ -244,20 +235,8 @@ static void grid_step_combustion(IntGrid *g) {
     }
 }
 
-static void grid_step_o2_displacement(IntGrid *g) {
-    for (int i = 0; i < g->width * g->height; i++) {
-        IntCell *c = &g->cells[i];
-
-        // Calculate submersion factor (0 = dry, 1 = fully submerged)
-        fixed16_t submersion = fixed_div(c->h2o_liquid, FLOAT_TO_FIXED(1.0f));
-        if (submersion > FIXED_ONE) submersion = FIXED_ONE;
-        if (submersion < 0) submersion = 0;
-
-        // O2 displaced proportionally
-        fixed16_t air_fraction = FIXED_ONE - submersion;
-        c->o2_mass = fixed_mul(AMBIENT_O2, air_fraction);
-    }
-}
+// Note: No O2 displacement - hermetic simulation
+// Combustion checks water directly (h2o_liquid > threshold = no burn)
 
 static void grid_step(IntGrid *g) {
     // Update thermal properties
@@ -265,7 +244,7 @@ static void grid_step(IntGrid *g) {
         cell_update_thermal(&g->cells[i]);
     }
 
-    grid_step_o2_displacement(g);
+    // Note: O2 is conserved; no displacement by water
     grid_step_conduction(g);
     grid_step_combustion(g);
     grid_step_evaporation(g);
@@ -313,6 +292,7 @@ static bool test_fire_extinguished_by_flooding(void) {
 
     IntCell *center = grid_get(&g, 1, 1);
     center->fuel_mass = FLOAT_TO_FIXED(0.5f);
+    center->o2_mass = FLOAT_TO_FIXED(0.5f);  // Extra O2 to sustain combustion
 
     // When adding fuel, we need to add energy too (fuel comes in at ambient temp)
     // Otherwise thermal_mass increases but energy stays same, lowering temp
@@ -320,10 +300,8 @@ static bool test_fire_extinguished_by_flooding(void) {
     center->energy += fixed_mul(fuel_th, center->temperature);
     center->thermal_mass += fuel_th;
 
-    // Start combustion
-    for (int i = 0; i < 5; i++) {
-        grid_step(&g);
-    }
+    // Start combustion (1 step is enough to ignite)
+    grid_step(&g);
     ASSERT_TRUE(center->is_burning, "fire didn't start");
 
     // Add water
@@ -367,43 +345,48 @@ static bool test_evaporation_plateau(void) {
     TEST_PASS();
 }
 
-// ============ TEST: O2 DISPLACEMENT ============
+// ============ TEST: HERMETIC O2 CONSERVATION ============
 
-static bool test_submerged_cell_no_oxygen(void) {
-    TEST_BEGIN("submerged cell has no oxygen");
-
-    IntGrid g;
-    grid_init(&g, 1, 1, 300.0f);
-
-    IntCell *cell = grid_get(&g, 0, 0);
-    ASSERT(cell->o2_mass > 0, "initial O2 should be present");
-
-    // Submerge
-    cell->h2o_liquid = FLOAT_TO_FIXED(2.0f);  // > 1 = fully submerged
-    grid_step(&g);
-
-    ASSERT(cell->o2_mass < FLOAT_TO_FIXED(0.001f), "O2 not displaced by water");
-
-    grid_free(&g);
-    TEST_PASS();
-}
-
-static bool test_partial_submersion_reduces_o2(void) {
-    TEST_BEGIN("partial submersion reduces O2 proportionally");
+static bool test_o2_conserved_when_submerged(void) {
+    TEST_BEGIN("O2 conserved when cell submerged");
 
     IntGrid g;
     grid_init(&g, 1, 1, 300.0f);
 
     IntCell *cell = grid_get(&g, 0, 0);
     fixed16_t initial_o2 = cell->o2_mass;
+    ASSERT(initial_o2 > 0, "initial O2 should be present");
 
-    // Half submerge
-    cell->h2o_liquid = FLOAT_TO_FIXED(0.5f);
+    // Submerge - O2 should NOT be affected (hermetic)
+    cell->h2o_liquid = FLOAT_TO_FIXED(2.0f);
     grid_step(&g);
 
-    // Should have ~50% O2
-    float ratio = FIXED_TO_FLOAT(cell->o2_mass) / FIXED_TO_FLOAT(initial_o2);
-    ASSERT(ratio > 0.4f && ratio < 0.6f, "O2 not reduced proportionally");
+    ASSERT_EQ(cell->o2_mass, initial_o2, "O2 changed when submerged");
+
+    grid_free(&g);
+    TEST_PASS();
+}
+
+static bool test_water_suppresses_combustion_directly(void) {
+    TEST_BEGIN("water suppresses combustion directly");
+
+    IntGrid g;
+    grid_init(&g, 1, 1, 700.0f);  // Hot enough to ignite
+
+    IntCell *cell = grid_get(&g, 0, 0);
+    cell->fuel_mass = FLOAT_TO_FIXED(0.5f);
+    fixed16_t initial_o2 = cell->o2_mass;
+
+    // Add water - should prevent combustion even though O2 is present
+    cell->h2o_liquid = FLOAT_TO_FIXED(0.2f);  // Above suppression threshold
+
+    for (int i = 0; i < 50; i++) {
+        grid_step(&g);
+    }
+
+    // O2 should be unchanged (not consumed because no burning)
+    ASSERT_EQ(cell->o2_mass, initial_o2, "O2 consumed despite water suppression");
+    ASSERT_FALSE(cell->is_burning, "cell burning despite water");
 
     grid_free(&g);
     TEST_PASS();
@@ -520,9 +503,9 @@ int main(void) {
     test_evaporation_mass_conservation();
     test_suite_end();
 
-    test_suite_begin("O2 DISPLACEMENT");
-    test_submerged_cell_no_oxygen();
-    test_partial_submersion_reduces_o2();
+    test_suite_begin("HERMETIC O2 CONSERVATION");
+    test_o2_conserved_when_submerged();
+    test_water_suppresses_combustion_directly();
     test_suite_end();
 
     test_summary();
