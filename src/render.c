@@ -598,22 +598,34 @@ void render_frame(const GameState *state)
     DrawText("Q/E-Up/Down  Space-Pause  R-Reset", 20, 71, 10, LIGHTGRAY);
 
     // ========== UI: BOTTOM-LEFT STATS ==========
-    DrawRectangle(10, SCREEN_HEIGHT - 55, 180, 45, Fade(BLACK, 0.7f));
+    DrawRectangle(10, SCREEN_HEIGHT - 85, 260, 75, Fade(BLACK, 0.7f));
 
-    // Counts
-    int total_voxels = 0;
+    // Voxel counts
+    int total_voxels = 0, trunk_count = 0, branch_count = 0, leaf_count = 0;
     for (int t = 0; t < state->tree_count; t++) {
         total_voxels += state->trees[t].voxel_count;
+        trunk_count += state->trees[t].trunk_count;
+        branch_count += state->trees[t].branch_count;
+        leaf_count += state->trees[t].leaf_count;
     }
-    float total_water = FIXED_TO_FLOAT(water_calculate_total(&state->water));
 
     DrawText(TextFormat("Trees: %d  Voxels: %d", state->tree_count, total_voxels),
-             20, SCREEN_HEIGHT - 48, 12, WHITE);
-    DrawText(TextFormat("Water: %.0f  Beavers: %d", total_water, state->beaver_count),
-             20, SCREEN_HEIGHT - 32, 12, (Color){ 80, 170, 220, 255 });
+             20, SCREEN_HEIGHT - 78, 12, WHITE);
+    DrawText(TextFormat("  Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
+             20, SCREEN_HEIGHT - 63, 11, LIGHTGRAY);
 
-    // FPS
-    DrawText(TextFormat("%d FPS", GetFPS()), 20, SCREEN_HEIGHT - 16, 12, GREEN);
+    // Water info
+    int water_cells = instanceCounts[GROUP_WATER_SHALLOW] + instanceCounts[GROUP_WATER_DEEP];
+    float total_water = FIXED_TO_FLOAT(water_calculate_total(&state->water));
+    DrawText(TextFormat("Water: %.0f units (%d cells)  Beavers: %d",
+             total_water, water_cells, state->beaver_count),
+             20, SCREEN_HEIGHT - 46, 11, (Color){ 80, 170, 220, 255 });
+
+    // Rendering info
+    int total_instances = 0;
+    for (int i = 0; i < GROUP_COUNT; i++) total_instances += instanceCounts[i];
+    DrawText(TextFormat("Instances: %d  FPS: %d", total_instances, GetFPS()),
+             20, SCREEN_HEIGHT - 29, 11, GREEN);
 
     EndDrawing();
 }

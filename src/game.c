@@ -314,7 +314,7 @@ void game_update(GameState *state)
             matter_add_heat_at(&state->matter,
                               state->target_world_x,
                               state->target_world_z,
-                              FLOAT_TO_FIXED(-300.0f));  // Negative = cooling
+                              FLOAT_TO_FIXED(-500.0f));  // Same rate as heating
         } else if (state->current_tool == TOOL_WATER) {
             // For water tool, add water to both systems
             water_add_at_world(&state->water,
