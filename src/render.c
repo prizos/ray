@@ -439,11 +439,28 @@ void render_frame(const GameState *state)
             leg_w * 1.2f, leg_h, leg_w * 1.3f, angle);
     }
 
-    // ========== COLLECT WATER INSTANCES ==========
-    // Water is now in the unified matter system
+    // ========== COLLECT WATER INSTANCES (SMOOTHED) ==========
+    // Water is rendered with interpolated heights for a smoother, flowing appearance
     if (state->matter.initialized) {
         const float DEPTH_THRESHOLD = 0.05f;  // Minimum depth to render
         const float DEEP_THRESHOLD = 2.0f;    // Depth at which water is "deep"
+        const int SUBDIVISIONS = 2;           // Subdivide each cell into NxN quads
+        const float SUB_SIZE = TERRAIN_SCALE / SUBDIVISIONS;
+
+        // Wave animation parameters
+        float wave_time = state->matter.tick * 0.05f;
+        const float WAVE_HEIGHT = 0.15f;      // Wave amplitude
+        const float WAVE_FREQ = 0.3f;         // Spatial frequency
+
+        // Helper: get water depth at cell with bounds checking
+        #define GET_DEPTH(cx, cz) ( \
+            ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) \
+            ? FIXED_TO_FLOAT(CELL_H2O_LIQUID(&state->matter.cells[cx][cz])) : 0.0f)
+
+        // Helper: get terrain top at cell
+        #define GET_TERRAIN_TOP(cx, cz) ( \
+            ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) \
+            ? (state->matter.cells[cx][cz].terrain_height * TERRAIN_SCALE + TERRAIN_SCALE * 0.5f) : 0.0f)
 
         for (int x = 0; x < MATTER_RES; x++) {
             for (int z = 0; z < MATTER_RES; z++) {
@@ -451,34 +468,74 @@ void render_frame(const GameState *state)
                 float depth = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
                 if (depth < DEPTH_THRESHOLD) continue;
 
-                // World position - must match terrain positioning exactly
-                // Terrain uses: world_x = x * TERRAIN_SCALE (cube centered there)
-                float world_x = x * TERRAIN_SCALE;
-                float world_z = z * TERRAIN_SCALE;
+                // Get depths from this cell and neighbors for interpolation
+                float d00 = depth;
+                float d10 = GET_DEPTH(x + 1, z);
+                float d01 = GET_DEPTH(x, z + 1);
+                float d11 = GET_DEPTH(x + 1, z + 1);
 
-                // Terrain height in voxel units
-                int terrain_h = cell->terrain_height;
+                // Get terrain tops
+                float t00 = GET_TERRAIN_TOP(x, z);
+                float t10 = GET_TERRAIN_TOP(x + 1, z);
+                float t01 = GET_TERRAIN_TOP(x, z + 1);
+                float t11 = GET_TERRAIN_TOP(x + 1, z + 1);
 
-                // Terrain cube is centered at (terrain_h * TERRAIN_SCALE)
-                // Its TOP is at (terrain_h * TERRAIN_SCALE) + TERRAIN_SCALE/2
-                float terrain_top = (terrain_h * TERRAIN_SCALE) + (TERRAIN_SCALE / 2.0f);
+                // Base world position (corner of cell)
+                float base_x = x * TERRAIN_SCALE - TERRAIN_SCALE * 0.5f;
+                float base_z = z * TERRAIN_SCALE - TERRAIN_SCALE * 0.5f;
 
-                // Water height in world units
-                float water_height = depth * TERRAIN_SCALE;
-                if (water_height < 0.5f) water_height = 0.5f;  // Minimum visible height
-                if (water_height > 50.0f) water_height = 50.0f;
+                // Render subdivided quads with interpolated heights
+                for (int sx = 0; sx < SUBDIVISIONS; sx++) {
+                    for (int sz = 0; sz < SUBDIVISIONS; sz++) {
+                        // Interpolation factors (0 to 1 across the cell)
+                        float u = (sx + 0.5f) / SUBDIVISIONS;
+                        float v = (sz + 0.5f) / SUBDIVISIONS;
 
-                // Water cube center: sits on top of terrain
-                float water_y = terrain_top + (water_height / 2.0f);
+                        // Bilinear interpolation of depth
+                        float depth_interp = d00 * (1-u) * (1-v) +
+                                             d10 * u * (1-v) +
+                                             d01 * (1-u) * v +
+                                             d11 * u * v;
 
-                // Choose shallow or deep based on depth
-                ColorGroup group = (depth > DEEP_THRESHOLD) ? GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
+                        // Bilinear interpolation of terrain top
+                        float terrain_interp = t00 * (1-u) * (1-v) +
+                                               t10 * u * (1-v) +
+                                               t01 * (1-u) * v +
+                                               t11 * u * v;
 
-                // Add water cube - use TERRAIN_SCALE to match terrain cube size exactly
-                add_instance_scaled(group, world_x, water_y, world_z,
-                                   TERRAIN_SCALE, water_height, TERRAIN_SCALE);
+                        if (depth_interp < DEPTH_THRESHOLD * 0.5f) continue;
+
+                        // World position of this sub-quad
+                        float world_x = base_x + (sx + 0.5f) * SUB_SIZE;
+                        float world_z = base_z + (sz + 0.5f) * SUB_SIZE;
+
+                        // Add wave displacement
+                        float wave = sinf(world_x * WAVE_FREQ + wave_time) *
+                                     cosf(world_z * WAVE_FREQ * 0.7f + wave_time * 0.8f) *
+                                     WAVE_HEIGHT;
+
+                        // Water height with wave
+                        float water_height = depth_interp * TERRAIN_SCALE;
+                        if (water_height < 0.3f) water_height = 0.3f;
+                        if (water_height > 50.0f) water_height = 50.0f;
+
+                        // Water surface Y position
+                        float water_y = terrain_interp + water_height * 0.5f + wave;
+
+                        // Choose color based on interpolated depth
+                        ColorGroup group = (depth_interp > DEEP_THRESHOLD) ?
+                                           GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
+
+                        // Add water quad
+                        add_instance_scaled(group, world_x, water_y, world_z,
+                                           SUB_SIZE, water_height, SUB_SIZE);
+                    }
+                }
             }
         }
+
+        #undef GET_DEPTH
+        #undef GET_TERRAIN_TOP
     }
 
     // ========== COLLECT MATTER VEGETATION INSTANCES ==========
