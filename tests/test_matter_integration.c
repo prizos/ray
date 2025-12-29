@@ -130,9 +130,14 @@ static void grid_step(TestGrid *g, bool use_fuel_filter, bool use_radiation) {
                 bool they_have_fuel = neighbor->has_fuel;
                 bool they_are_hot = neighbor->temperature > TEST_FIRE_TEMP;
 
-                // Skip if fuel filter is on and neither has fuel/is hot
+                // Check for cold cells (below ambient - 50K)
+                bool i_am_cold = cell->temperature < TEST_COLD_TEMP;
+                bool they_are_cold = neighbor->temperature < TEST_COLD_TEMP;
+
+                // Skip if fuel filter is on and neither has fuel/is hot/is cold
                 if (use_fuel_filter) {
-                    if (!i_have_fuel && !they_have_fuel && !i_am_hot && !they_are_hot) {
+                    if (!i_have_fuel && !they_have_fuel && !i_am_hot && !they_are_hot &&
+                        !i_am_cold && !they_are_cold) {
                         continue;
                     }
                 }
@@ -328,6 +333,37 @@ static bool test_heat_spreads_from_source(void) {
     TEST_PASS();
 }
 
+static bool test_cold_spreads_from_source(void) {
+    TEST_BEGIN("cold spreads from frozen cell");
+
+    TestGrid g;
+    grid_init(&g, 5, 5, 293.0f);  // Start at ambient (~20°C)
+
+    // Freeze center to absolute zero
+    GridCell *center = grid_get(&g, 2, 2);
+    center->energy = 0;  // 0K
+    cell_update_temp(center);
+
+    float initial_neighbor_temp = FIXED_TO_FLOAT(grid_get(&g, 2, 1)->temperature);
+
+    // Run steps - heat should flow INTO the cold cell, cooling neighbors
+    for (int i = 0; i < 10; i++) {
+        grid_step(&g, true, false);  // With fuel filter (tests cold detection)
+    }
+
+    // Neighbors should be cooler than they started
+    float final_neighbor_temp = FIXED_TO_FLOAT(grid_get(&g, 2, 1)->temperature);
+    ASSERT(final_neighbor_temp < initial_neighbor_temp,
+           "neighbors didn't cool down near frozen cell");
+
+    // Center should have warmed up (received heat)
+    float center_temp = FIXED_TO_FLOAT(center->temperature);
+    ASSERT(center_temp > 0.0f, "frozen cell didn't warm up");
+
+    grid_free(&g);
+    TEST_PASS();
+}
+
 static bool test_equilibrium_reached(void) {
     TEST_BEGIN("system reaches equilibrium");
 
@@ -469,6 +505,7 @@ int main(void) {
 
     test_suite_begin("HEAT PROPAGATION");
     test_heat_spreads_from_source();
+    test_cold_spreads_from_source();
     test_equilibrium_reached();
     test_suite_end();
 

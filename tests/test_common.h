@@ -127,6 +127,7 @@ static inline fixed16_t fixed_div(fixed16_t a, fixed16_t b) {
 #define TEST_AMBIENT_TEMP_K 293.15f
 #define TEST_AMBIENT_TEMP FLOAT_TO_FIXED(293.15f)
 #define TEST_FIRE_TEMP FLOAT_TO_FIXED(400.0f)
+#define TEST_COLD_TEMP FLOAT_TO_FIXED(243.15f)  // 50K below ambient (-30°C)
 #define TEST_IGNITION_TEMP FLOAT_TO_FIXED(533.0f)
 
 #endif // TEST_COMMON_H

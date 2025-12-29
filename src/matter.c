@@ -380,8 +380,14 @@ void matter_conduct_heat(MatterState *state) {
                 bool they_have_fuel = their_fuel >= min_fuel;
                 bool they_are_hot = neighbor->temperature > fire_temp;
 
-                // Skip if neither has fuel AND neither is hot
-                if (!i_have_fuel && !they_have_fuel && !i_am_hot && !they_are_hot) {
+                // Check if either cell is cold (below ambient - 50K buffer)
+                fixed16_t cold_threshold = AMBIENT_TEMP - FLOAT_TO_FIXED(50.0f);
+                bool i_am_cold = cell->temperature < cold_threshold;
+                bool they_are_cold = neighbor->temperature < cold_threshold;
+
+                // Skip if neither has fuel AND neither is hot AND neither is cold
+                if (!i_have_fuel && !they_have_fuel && !i_am_hot && !they_are_hot &&
+                    !i_am_cold && !they_are_cold) {
                     continue;
                 }
 
