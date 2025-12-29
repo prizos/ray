@@ -201,9 +201,12 @@ void game_update(GameState *state)
         state->current_tool = TOOL_HEAT;
     }
     if (IsKeyPressed(KEY_TWO)) {
-        state->current_tool = TOOL_TREE;
+        state->current_tool = TOOL_COOL;
     }
     if (IsKeyPressed(KEY_THREE)) {
+        state->current_tool = TOOL_TREE;
+    }
+    if (IsKeyPressed(KEY_FOUR)) {
         state->current_tool = TOOL_WATER;
     }
 
@@ -259,6 +262,16 @@ void game_update(GameState *state)
                         state->target_world_x = grid_x * CELL_SIZE + CELL_SIZE / 2.0f;
                         state->target_world_y = ground_height * TERRAIN_SCALE + TERRAIN_SCALE / 2.0f;
                         state->target_world_z = grid_z * CELL_SIZE + CELL_SIZE / 2.0f;
+
+                        // Read temperature at target for heat/cool tools
+                        int matter_x, matter_z;
+                        matter_world_to_cell(state->target_world_x, state->target_world_z, &matter_x, &matter_z);
+                        const MatterCell *target_cell = matter_get_cell_const(&state->matter, matter_x, matter_z);
+                        if (target_cell) {
+                            state->target_temperature = kelvin_to_celsius(target_cell->temperature);
+                        } else {
+                            state->target_temperature = 20.0f;  // Default ambient
+                        }
                     }
                     break;
                 }
@@ -287,14 +300,21 @@ void game_update(GameState *state)
         }
     }
 
-    // Heat and Water tools: hold to continuously add
+    // Heat, Cool, and Water tools: hold to continuously apply
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && state->target_valid) {
         if (state->current_tool == TOOL_HEAT) {
             // Add heat to matter cell - hold to spray fire
             matter_add_heat_at(&state->matter,
                               state->target_world_x,
                               state->target_world_z,
-                              FLOAT_TO_FIXED(500.0f));  // Less per frame since continuous
+                              FLOAT_TO_FIXED(500.0f));  // Energy per frame
+        } else if (state->current_tool == TOOL_COOL) {
+            // Remove heat from matter cell - cooling tool
+            // Uses negative energy to remove heat
+            matter_add_heat_at(&state->matter,
+                              state->target_world_x,
+                              state->target_world_z,
+                              FLOAT_TO_FIXED(-300.0f));  // Negative = cooling
         } else if (state->current_tool == TOOL_WATER) {
             // For water tool, add water to both systems
             water_add_at_world(&state->water,

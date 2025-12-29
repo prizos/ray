@@ -31,6 +31,7 @@
 typedef enum {
     TOOL_TREE,
     TOOL_HEAT,   // Adds heat to matter cells (fire tool)
+    TOOL_COOL,   // Removes heat from matter cells (cooling tool)
     TOOL_WATER
 } ToolType;
 
@@ -52,6 +53,7 @@ typedef struct GameState {
     float target_world_x;
     float target_world_y;
     float target_world_z;
+    float target_temperature;  // Temperature at target in Celsius (for heat/cool tools)
 
     // Terrain
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];

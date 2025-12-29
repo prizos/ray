@@ -570,13 +570,24 @@ void render_frame(const GameState *state)
     if (state->current_tool == TOOL_HEAT) {
         tool_name = "HEAT";
         tool_color = ORANGE;
+    } else if (state->current_tool == TOOL_COOL) {
+        tool_name = "COOL";
+        tool_color = (Color){ 100, 180, 255, 255 };  // Light blue
     } else if (state->current_tool == TOOL_WATER) {
         tool_name = "WATER";
         tool_color = (Color){ 80, 170, 220, 255 };
     }
-    DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
 
-    DrawText("1 - Heat, 2 - Tree, 3 - Water", 20, 42, 12, LIGHTGRAY);
+    // Show temperature for heat/cool tools
+    if ((state->current_tool == TOOL_HEAT || state->current_tool == TOOL_COOL) && state->target_valid) {
+        float temp = state->target_temperature;
+        Color temp_color = temp > 100 ? RED : (temp < 0 ? SKYBLUE : WHITE);
+        DrawText(TextFormat("%s %.0fC", tool_name, temp), 200, 17, 16, temp_color);
+    } else {
+        DrawText(TextFormat("Tool: %s", tool_name), 200, 17, 16, tool_color);
+    }
+
+    DrawText("1-Heat 2-Cool 3-Tree 4-Water", 20, 42, 12, LIGHTGRAY);
     DrawText("Left-click - Use tool", 20, 57, 12, LIGHTGRAY);
     DrawText("Right-click + drag - Look around", 20, 72, 12, LIGHTGRAY);
     DrawText("WASD - Move, Q/E - Down/Up, Shift - Sprint", 20, 87, 12, LIGHTGRAY);
