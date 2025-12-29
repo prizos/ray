@@ -5,7 +5,7 @@
 #include "tree.h"
 #include "terrain.h"
 #include "beaver.h"
-#include "matter.h"
+#include "svo.h"
 #include <stdint.h>
 
 // ============ DISPLAY CONSTANTS ============
@@ -62,8 +62,8 @@ typedef struct GameState {
     // Terrain
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
 
-    // Matter simulation (unified thermodynamics: water, fire, nutrients)
-    MatterState matter;
+    // Matter simulation (3D SVO-based thermodynamics)
+    MatterSVO matter_svo;
 
     // Trees (dynamically allocated, grows as needed)
     Tree *trees;

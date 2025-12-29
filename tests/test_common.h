@@ -124,6 +124,8 @@ static inline fixed16_t fixed_div(fixed16_t a, fixed16_t b) {
 
 // ============ CONSTANTS ============
 
+// For tests, we use INITIAL_TEMP_K from svo.h for initializing matter
+// TEST_AMBIENT_TEMP_K is kept for backward compatibility with old tests
 #define TEST_AMBIENT_TEMP_K 293.15f
 #define TEST_AMBIENT_TEMP FLOAT_TO_FIXED(293.15f)
 #define TEST_FIRE_TEMP FLOAT_TO_FIXED(400.0f)

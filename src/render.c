@@ -1,5 +1,5 @@
 #include "render.h"
-#include "matter.h"
+#include "svo.h"
 #include "raymath.h"
 #include <stdlib.h>
 #include <string.h>
@@ -439,237 +439,65 @@ void render_frame(const GameState *state)
             leg_w * 1.2f, leg_h, leg_w * 1.3f, angle);
     }
 
-    // ========== COLLECT WATER INSTANCES (SMOOTH SURFACE) ==========
-    // Render water as a continuous sloping surface by interpolating surface heights
-    if (state->matter.initialized) {
-        const float DEPTH_THRESHOLD = 0.05f;  // Minimum depth to render
-        const float DEEP_THRESHOLD = 2.0f;    // Depth for deep water color
-        const float SURFACE_THICKNESS = 0.4f; // Thin slab thickness for surface
-        const int SUBDIVISIONS = 3;           // Higher subdivision for smoother surface
-        const float SUB_SIZE = TERRAIN_SCALE / SUBDIVISIONS;
+    // ========== COLLECT WATER/MATTER INSTANCES FROM SVO ==========
+    // Sample the SVO around the terrain area and render visible materials
+    {
+        // Sample area: cover the terrain grid area, multiple Y levels
+        int sample_start_x = SVO_SIZE / 2 - TERRAIN_RESOLUTION / 2;
+        int sample_start_z = SVO_SIZE / 2 - TERRAIN_RESOLUTION / 2;
+        int sample_end_x = sample_start_x + TERRAIN_RESOLUTION;
+        int sample_end_z = sample_start_z + TERRAIN_RESOLUTION;
 
-        // Wave animation
-        float wave_time = state->matter.tick * 0.05f;
-        const float WAVE_HEIGHT = 0.12f;
-        const float WAVE_FREQ = 0.25f;
+        // Y range: from below ground to above (ground level +/- some range)
+        int y_min = SVO_GROUND_Y - 5;
+        int y_max = SVO_GROUND_Y + 20;
 
-        // Helper: get water SURFACE height at cell (terrain + water depth)
-        // Returns -1000 if no water (used as sentinel)
-        #define GET_SURFACE(cx, cz) ({ \
-            float _surf = -1000.0f; \
-            if ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) { \
-                const MatterCell *_c = &state->matter.cells[cx][cz]; \
-                float _d = FIXED_TO_FLOAT(CELL_H2O_LIQUID(_c)); \
-                if (_d >= DEPTH_THRESHOLD * 0.3f) { \
-                    float _t = _c->terrain_height * TERRAIN_SCALE + TERRAIN_SCALE * 0.5f; \
-                    _surf = _t + _d * TERRAIN_SCALE; \
-                } \
-            } \
-            _surf; \
-        })
+        for (int cx = sample_start_x; cx < sample_end_x; cx++) {
+            for (int cz = sample_start_z; cz < sample_end_z; cz++) {
+                for (int cy = y_min; cy < y_max; cy++) {
+                    const Cell3D *cell = svo_get_cell((MatterSVO*)&state->matter_svo, cx, cy, cz);
+                    if (!cell || cell->material_count == 0) continue;
 
-        // Helper: get depth at cell
-        #define GET_DEPTH(cx, cz) ( \
-            ((cx) >= 0 && (cx) < MATTER_RES && (cz) >= 0 && (cz) < MATTER_RES) \
-            ? FIXED_TO_FLOAT(CELL_H2O_LIQUID(&state->matter.cells[cx][cz])) : 0.0f)
+                    // Check for water
+                    const MaterialEntry *water = cell3d_find_material_const(cell, MAT_WATER);
+                    if (water && water->state.moles > 0.1) {
+                        // Convert cell coords to world coords
+                        float wx, wy, wz;
+                        svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
 
-        for (int x = 0; x < MATTER_RES; x++) {
-            for (int z = 0; z < MATTER_RES; z++) {
-                const MatterCell *cell = &state->matter.cells[x][z];
-                float depth = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
-                if (depth < DEPTH_THRESHOLD) continue;
+                        // Determine water depth for coloring
+                        double water_moles = water->state.moles;
+                        ColorGroup water_group = (water_moles > 2.0) ? GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
 
-                // Get water surface heights at cell corners (for bilinear interp)
-                // Use this cell's surface for corners where neighbors have no water
-                float this_surface = cell->terrain_height * TERRAIN_SCALE +
-                                     TERRAIN_SCALE * 0.5f + depth * TERRAIN_SCALE;
+                        // Check phase - ice vs liquid vs steam
+                        // Use energy-based phase for accurate rendering
+                        Phase phase = material_get_phase_from_energy(&water->state, MAT_WATER);
 
-                float s00 = GET_SURFACE(x, z);
-                float s10 = GET_SURFACE(x + 1, z);
-                float s01 = GET_SURFACE(x, z + 1);
-                float s11 = GET_SURFACE(x + 1, z + 1);
+                        if (phase == PHASE_SOLID) {
+                            water_group = GROUP_ICE;
+                        } else if (phase == PHASE_GAS) {
+                            water_group = GROUP_STEAM;
+                        }
 
-                // For neighbors without water, blend toward this cell's surface
-                // to create smooth edges rather than hard cutoffs
-                if (s00 < -500) s00 = this_surface;
-                if (s10 < -500) s10 = this_surface * 0.7f + s00 * 0.3f;
-                if (s01 < -500) s01 = this_surface * 0.7f + s00 * 0.3f;
-                if (s11 < -500) s11 = (s10 + s01) * 0.5f;
-
-                // Get depths for color selection
-                float d00 = depth;
-                float d10 = GET_DEPTH(x + 1, z);
-                float d01 = GET_DEPTH(x, z + 1);
-                float d11 = GET_DEPTH(x + 1, z + 1);
-
-                // Base world position (cell corner)
-                float base_x = x * TERRAIN_SCALE - TERRAIN_SCALE * 0.5f;
-                float base_z = z * TERRAIN_SCALE - TERRAIN_SCALE * 0.5f;
-
-                // Render subdivided surface quads
-                for (int sx = 0; sx < SUBDIVISIONS; sx++) {
-                    for (int sz = 0; sz < SUBDIVISIONS; sz++) {
-                        // Interpolation factors
-                        float u = (sx + 0.5f) / SUBDIVISIONS;
-                        float v = (sz + 0.5f) / SUBDIVISIONS;
-
-                        // Bilinear interpolation of surface height
-                        float surface_y = s00 * (1-u) * (1-v) +
-                                          s10 * u * (1-v) +
-                                          s01 * (1-u) * v +
-                                          s11 * u * v;
-
-                        // Bilinear interpolation of depth (for color)
-                        float depth_interp = d00 * (1-u) * (1-v) +
-                                             d10 * u * (1-v) +
-                                             d01 * (1-u) * v +
-                                             d11 * u * v;
-
-                        // World position
-                        float world_x = base_x + (sx + 0.5f) * SUB_SIZE;
-                        float world_z = base_z + (sz + 0.5f) * SUB_SIZE;
-
-                        // Wave displacement
-                        float wave = sinf(world_x * WAVE_FREQ + wave_time) *
-                                     cosf(world_z * WAVE_FREQ * 0.7f + wave_time * 0.8f) *
-                                     WAVE_HEIGHT;
-
-                        // Surface Y with wave
-                        float water_y = surface_y + wave;
-
-                        // Thickness varies slightly with depth for visual interest
-                        float thickness = SURFACE_THICKNESS + depth_interp * 0.1f;
-
-                        // Color based on depth
-                        ColorGroup group = (depth_interp > DEEP_THRESHOLD) ?
-                                           GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
-
-                        // Render as thin surface slab
-                        add_instance_scaled(group, world_x, water_y, world_z,
-                                           SUB_SIZE * 1.02f, thickness, SUB_SIZE * 1.02f);
-                    }
-                }
-            }
-        }
-
-        #undef GET_SURFACE
-        #undef GET_DEPTH
-    }
-
-    // ========== COLLECT MATTER VEGETATION INSTANCES ==========
-    // Now uses physics-based substances (SUBST_CELLULOSE, SUBST_ASH, etc.)
-    if (state->matter.initialized) {
-        const float MIN_DENSITY = 0.05f;  // Minimum density to render
-        const float VEG_HEIGHT_BASE = 0.3f;  // Base vegetation height
-        const float VEG_HEIGHT_SCALE = 2.0f; // Height multiplier based on density
-
-        for (int x = 0; x < MATTER_RES; x++) {
-            for (int z = 0; z < MATTER_RES; z++) {
-                const MatterCell *cell = &state->matter.cells[x][z];
-
-                // World position
-                float world_x = x * MATTER_CELL_SIZE;
-                float world_z = z * MATTER_CELL_SIZE;
-                float terrain_top = (cell->terrain_height * TERRAIN_SCALE) + (TERRAIN_SCALE / 2.0f);
-
-                // Check if cell is burning (cellulose + O2 + high temp)
-                bool is_burning = cell_can_combust(cell, SUBST_CELLULOSE);
-
-                // Render cellulose (vegetation/biomass)
-                float cellulose = FIXED_TO_FLOAT(cell->cellulose_solid);
-                if (cellulose > MIN_DENSITY) {
-                    float height = VEG_HEIGHT_BASE + cellulose * VEG_HEIGHT_SCALE;
-                    float y = terrain_top + height / 2.0f;
-                    ColorGroup grp = is_burning ? GROUP_BURNING_MATTER : GROUP_CELLULOSE;
-                    add_instance_scaled(grp, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.8f, height, MATTER_CELL_SIZE * 0.8f);
-                }
-
-                // Render ash
-                float ash = FIXED_TO_FLOAT(cell->ash_solid);
-                if (ash > MIN_DENSITY) {
-                    float height = 0.05f + ash * 0.15f;
-                    float y = terrain_top + height / 2.0f;
-                    add_instance_scaled(GROUP_ASH, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.5f, height, MATTER_CELL_SIZE * 0.5f);
-                }
-
-                // ========== RENDER ICE (frozen water) ==========
-                float ice = FIXED_TO_FLOAT(CELL_H2O_ICE(cell));
-                if (ice > MIN_DENSITY) {
-                    float height = 0.1f + ice * 0.5f;
-                    float y = terrain_top + height / 2.0f;
-                    add_instance_scaled(GROUP_ICE, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.9f, height, MATTER_CELL_SIZE * 0.9f);
-                }
-
-                // ========== RENDER LAVA (liquid silicate) ==========
-                float lava = FIXED_TO_FLOAT(CELL_SILICATE_LIQUID(cell));
-                if (lava > MIN_DENSITY) {
-                    float height = 0.2f + lava * 0.8f;
-                    float y = terrain_top + height / 2.0f;
-
-                    // Temperature-based coloring
-                    float temp = FIXED_TO_FLOAT(cell->temperature);
-                    ColorGroup lava_grp;
-                    if (temp > 2500.0f) {
-                        lava_grp = GROUP_LAVA_HOT;       // Yellow-white hot
-                    } else if (temp > 2350.0f) {
-                        lava_grp = GROUP_LAVA_COOLING;   // Orange
-                    } else {
-                        lava_grp = GROUP_LAVA_COLD;      // Dark red
+                        add_instance(water_group, wx, wy, wz, SVO_CELL_SIZE);
                     }
 
-                    add_instance_scaled(lava_grp, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.95f, height, MATTER_CELL_SIZE * 0.95f);
-                }
+                    // Check for lava (hot rock)
+                    const MaterialEntry *rock = cell3d_find_material_const(cell, MAT_ROCK);
+                    if (rock && rock->state.moles > 0.1) {
+                        // Use energy-based phase for accurate rendering
+                        Phase phase = material_get_phase_from_energy(&rock->state, MAT_ROCK);
+                        double temp = material_get_temperature(&rock->state, MAT_ROCK);
 
-                // ========== RENDER STEAM (water vapor) ==========
-                float steam = FIXED_TO_FLOAT(CELL_H2O_STEAM(cell));
-                if (steam > MIN_DENSITY * 2.0f) {  // Higher threshold for steam
-                    // Steam floats above the terrain
-                    float height = steam * 1.0f;
-                    float y = terrain_top + 2.0f + height / 2.0f;
-                    add_instance_scaled(GROUP_STEAM, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 1.2f, height, MATTER_CELL_SIZE * 1.2f);
-                }
+                        if (phase == PHASE_LIQUID) {
+                            float wx, wy, wz;
+                            svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
 
-                // ========== RENDER CRYOGENIC LIQUIDS ==========
-                // Liquid Nitrogen (very cold environments only)
-                float liquid_n2 = FIXED_TO_FLOAT(CELL_N2_LIQUID(cell));
-                if (liquid_n2 > MIN_DENSITY) {
-                    float height = 0.1f + liquid_n2 * 0.4f;
-                    float y = terrain_top + height / 2.0f;
-                    add_instance_scaled(GROUP_LIQUID_N2, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.85f, height, MATTER_CELL_SIZE * 0.85f);
-                }
-
-                // Liquid Oxygen (very cold environments only)
-                float liquid_o2 = FIXED_TO_FLOAT(CELL_O2_LIQUID(cell));
-                if (liquid_o2 > MIN_DENSITY) {
-                    float height = 0.1f + liquid_o2 * 0.4f;
-                    float y = terrain_top + height / 2.0f;
-                    add_instance_scaled(GROUP_LIQUID_O2, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.85f, height, MATTER_CELL_SIZE * 0.85f);
-                }
-
-                // ========== RENDER FROZEN GASES ==========
-                // Solid Nitrogen (extremely cold)
-                float solid_n2 = FIXED_TO_FLOAT(CELL_N2_SOLID(cell));
-                if (solid_n2 > MIN_DENSITY) {
-                    float height = 0.05f + solid_n2 * 0.3f;
-                    float y = terrain_top + height / 2.0f;
-                    add_instance_scaled(GROUP_SOLID_N2, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.7f, height, MATTER_CELL_SIZE * 0.7f);
-                }
-
-                // Solid Oxygen (extremely cold)
-                float solid_o2 = FIXED_TO_FLOAT(CELL_O2_SOLID(cell));
-                if (solid_o2 > MIN_DENSITY) {
-                    float height = 0.05f + solid_o2 * 0.3f;
-                    float y = terrain_top + height / 2.0f;
-                    add_instance_scaled(GROUP_SOLID_O2, world_x, y, world_z,
-                                       MATTER_CELL_SIZE * 0.7f, height, MATTER_CELL_SIZE * 0.7f);
+                            ColorGroup lava_group = (temp > 2500) ? GROUP_LAVA_HOT :
+                                                    (temp > 2000) ? GROUP_LAVA_COOLING : GROUP_LAVA_COLD;
+                            add_instance(lava_group, wx, wy, wz, SVO_CELL_SIZE);
+                        }
+                    }
                 }
             }
         }
@@ -831,11 +659,10 @@ void render_frame(const GameState *state)
     DrawText(TextFormat("  Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
              20, SCREEN_HEIGHT - 63, 11, LIGHTGRAY);
 
-    // Water info - calculate total from matter system
+    // Water info (SVO-based)
     int water_cells = instanceCounts[GROUP_WATER_SHALLOW] + instanceCounts[GROUP_WATER_DEEP];
-    float total_water = FIXED_TO_FLOAT(matter_total_mass(&state->matter, SUBST_H2O));
-    DrawText(TextFormat("H2O: %.0f units (%d cells)  Beavers: %d",
-             total_water, water_cells, state->beaver_count),
+    DrawText(TextFormat("Water cells: %d  Beavers: %d",
+             water_cells, state->beaver_count),
              20, SCREEN_HEIGHT - 46, 11, (Color){ 80, 170, 220, 255 });
 
     // Rendering info
@@ -844,30 +671,31 @@ void render_frame(const GameState *state)
     DrawText(TextFormat("Instances: %d  FPS: %d", total_instances, GetFPS()),
              20, SCREEN_HEIGHT - 29, 11, GREEN);
 
-    // ========== UI: RIGHT-SIDE MATTER INFO PANEL ==========
+    // ========== UI: RIGHT-SIDE MATTER INFO PANEL (SVO) ==========
     if (state->target_valid) {
         int panel_x = SCREEN_WIDTH - 200;
         int panel_y = 10;
         int panel_w = 190;
-        int panel_h = 220;
+        int panel_h = 180;
 
         DrawRectangle(panel_x, panel_y, panel_w, panel_h, Fade(BLACK, 0.8f));
 
-        // Get matter cell at cursor
-        int matter_x, matter_z;
-        matter_world_to_cell(state->target_world_x, state->target_world_z, &matter_x, &matter_z);
-        const MatterCell *cell = matter_get_cell_const(&state->matter, matter_x, matter_z);
+        // Get SVO cell info at cursor
+        CellInfo info = svo_get_cell_info((MatterSVO*)&state->matter_svo,
+                                          state->target_world_x,
+                                          state->target_world_y,
+                                          state->target_world_z);
 
         int y = panel_y + 8;
         int x = panel_x + 10;
 
         // Header with cell coordinates
-        DrawText(TextFormat("MATTER [%d,%d]", matter_x, matter_z), x, y, 12, WHITE);
+        DrawText(TextFormat("CELL [%d,%d,%d]", info.cell_x, info.cell_y, info.cell_z), x, y, 12, WHITE);
         y += 18;
 
-        if (cell) {
-            // Temperature
-            float temp_c = kelvin_to_celsius(cell->temperature);
+        if (info.valid) {
+            // Temperature (convert from Kelvin to Celsius)
+            float temp_c = (float)(info.temperature - 273.15);
             Color temp_color = temp_c > 100 ? RED : (temp_c < 0 ? SKYBLUE : WHITE);
             DrawText(TextFormat("Temp: %.1f C", temp_c), x, y, 11, temp_color);
             y += 14;
@@ -884,91 +712,37 @@ void render_frame(const GameState *state)
             DrawLine(x, y, x + panel_w - 20, y, DARKGRAY);
             y += 6;
 
-            // Water phases (H2O)
-            float ice = FIXED_TO_FLOAT(CELL_H2O_ICE(cell));
-            float water = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
-            float steam = FIXED_TO_FLOAT(CELL_H2O_STEAM(cell));
+            // Material count
+            DrawText(TextFormat("Materials: %d", info.material_count), x, y, 10, WHITE);
+            y += 14;
 
-            DrawText("H2O:", x, y, 10, (Color){ 80, 170, 220, 255 });
-            y += 12;
-            if (ice > 0.01f) {
-                DrawText(TextFormat("  Ice: %.2f", ice), x, y, 10, (Color){ 200, 230, 255, 255 });
-                y += 12;
-            }
-            if (water > 0.01f) {
-                DrawText(TextFormat("  Liquid: %.2f", water), x, y, 10, (Color){ 80, 170, 220, 255 });
-                y += 12;
-            }
-            if (steam > 0.01f) {
-                DrawText(TextFormat("  Steam: %.2f", steam), x, y, 10, (Color){ 200, 200, 200, 255 });
-                y += 12;
-            }
-            if (ice <= 0.01f && water <= 0.01f && steam <= 0.01f) {
-                DrawText("  (none)", x, y, 10, DARKGRAY);
-                y += 12;
-            }
+            // Primary material and phase
+            if (info.material_count > 0) {
+                const char *mat_names[] = {"None", "Air", "Water", "Rock", "Dirt",
+                                           "N2", "O2", "CO2", "Steam"};
+                const char *phase_names[] = {"Solid", "Liquid", "Gas"};
 
-            // Silicate (rock/lava)
-            float rock = FIXED_TO_FLOAT(CELL_SILICATE_SOLID(cell));
-            float lava = FIXED_TO_FLOAT(CELL_SILICATE_LIQUID(cell));
-            if (rock > 0.01f || lava > 0.01f) {
-                DrawText("Silicate:", x, y, 10, (Color){ 139, 90, 43, 255 });
-                y += 12;
-                if (rock > 0.01f) {
-                    DrawText(TextFormat("  Rock: %.2f", rock), x, y, 10, GRAY);
-                    y += 12;
-                }
-                if (lava > 0.01f) {
-                    DrawText(TextFormat("  Lava: %.2f", lava), x, y, 10, ORANGE);
-                    y += 12;
-                }
+                const char *mat_name = (info.primary_material < MAT_COUNT) ?
+                                       mat_names[info.primary_material] : "Unknown";
+                const char *phase_name = phase_names[info.primary_phase];
+
+                // Color based on material
+                Color mat_color = WHITE;
+                if (info.primary_material == MAT_WATER) mat_color = (Color){ 80, 170, 220, 255 };
+                else if (info.primary_material == MAT_ROCK) mat_color = GRAY;
+                else if (info.primary_material == MAT_DIRT) mat_color = (Color){ 139, 90, 43, 255 };
+                else if (info.primary_material == MAT_AIR) mat_color = LIGHTGRAY;
+
+                DrawText(TextFormat("Primary: %s (%s)", mat_name, phase_name), x, y, 10, mat_color);
+                y += 14;
             }
 
-            // Gases (CO2, smoke)
-            float co2 = FIXED_TO_FLOAT(cell->co2_gas);
-            float smoke = FIXED_TO_FLOAT(cell->smoke_gas);
-            if (co2 > 0.01f || smoke > 0.01f) {
-                DrawText("Gases:", x, y, 10, LIGHTGRAY);
-                y += 12;
-                if (co2 > 0.01f) {
-                    DrawText(TextFormat("  CO2: %.2f", co2), x, y, 10, LIGHTGRAY);
-                    y += 12;
-                }
-                if (smoke > 0.01f) {
-                    DrawText(TextFormat("  Smoke: %.2f", smoke), x, y, 10, DARKGRAY);
-                    y += 12;
-                }
-            }
+            // SVO depth info (for debugging)
+            DrawText(TextFormat("Y level: %d (ground=%d)", info.cell_y, SVO_GROUND_Y), x, y, 10, DARKGRAY);
+            y += 14;
 
-            // Organics
-            float cellulose = FIXED_TO_FLOAT(cell->cellulose_solid);
-            float ash = FIXED_TO_FLOAT(cell->ash_solid);
-            if (cellulose > 0.01f || ash > 0.01f) {
-                DrawText("Organic:", x, y, 10, (Color){ 34, 139, 34, 255 });
-                y += 12;
-                if (cellulose > 0.01f) {
-                    DrawText(TextFormat("  Cellulose: %.2f", cellulose), x, y, 10, GREEN);
-                    y += 12;
-                }
-                if (ash > 0.01f) {
-                    DrawText(TextFormat("  Ash: %.2f", ash), x, y, 10, GRAY);
-                    y += 12;
-                }
-            }
-
-            // Geology and light at bottom
-            const char *geo_names[] = {"None", "Topsoil", "Rock", "Bedrock", "Lava", "Ignite"};
-            const char *geo_name = (cell->geology_type < 6) ? geo_names[cell->geology_type] : "?";
-            float light = FIXED_TO_FLOAT(cell->light_level);
-
-            // Only show if space remains
-            if (y < panel_y + panel_h - 16) {
-                DrawLine(x, y + 2, x + panel_w - 20, y + 2, DARKGRAY);
-                y += 8;
-                DrawText(TextFormat("Geo: %s  Light: %.0f%%", geo_name, light * 100), x, y, 10, DARKGRAY);
-            }
         } else {
-            DrawText("(no cell data)", x, y, 10, DARKGRAY);
+            DrawText("(outside SVO bounds)", x, y, 10, DARKGRAY);
         }
     }
 

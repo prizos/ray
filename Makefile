@@ -28,8 +28,8 @@ BUILD_DIR = build
 INCLUDE_DIR = include
 TEST_DIR = tests
 
-# Files (exclude test files and standalone tools from main build)
-SRCS = $(filter-out $(SRC_DIR)/test_%.c $(SRC_DIR)/terrain_tune.c,$(wildcard $(SRC_DIR)/*.c))
+# Files (exclude test files, standalone tools, and old matter system from main build)
+SRCS = $(filter-out $(SRC_DIR)/test_%.c $(SRC_DIR)/terrain_tune.c $(SRC_DIR)/matter.c,$(wildcard $(SRC_DIR)/*.c))
 OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 DEPS = $(OBJS:.o=.d)
 TARGET = game
@@ -182,6 +182,53 @@ $(BUILD_DIR)/test_phase_transitions: $(TEST_DIR)/test_phase_transitions.c | $(BU
 test-phase: $(BUILD_DIR)/test_phase_transitions
 	./$(BUILD_DIR)/test_phase_transitions
 
+# ============ SVO UNIT TESTS ============
+$(BUILD_DIR)/test_svo_unit: $(TEST_DIR)/test_svo_unit.c $(SRC_DIR)/svo.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c $(SRC_DIR)/noise.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-svo-unit: $(BUILD_DIR)/test_svo_unit
+	./$(BUILD_DIR)/test_svo_unit
+
+# ============ SVO MEMORY TESTS ============
+$(BUILD_DIR)/test_svo_memory: $(TEST_DIR)/test_svo_memory.c $(SRC_DIR)/svo.c $(SRC_DIR)/svo_physics.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c $(SRC_DIR)/noise.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-svo-memory: $(BUILD_DIR)/test_svo_memory
+	./$(BUILD_DIR)/test_svo_memory
+
+# ============ SVO PHYSICS TESTS ============
+$(BUILD_DIR)/test_svo_physics: $(TEST_DIR)/test_svo_physics.c $(SRC_DIR)/svo.c $(SRC_DIR)/svo_physics.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c $(SRC_DIR)/noise.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-svo-physics: $(BUILD_DIR)/test_svo_physics
+	./$(BUILD_DIR)/test_svo_physics
+
+# Run all SVO tests
+test-svo: test-svo-unit test-svo-memory test-svo-physics
+	@echo ""
+	@echo "All SVO tests passed!"
+
+# ============ TOOL INTEGRATION TESTS ============
+$(BUILD_DIR)/test_tool_integration: $(TEST_DIR)/test_tool_integration.c $(SRC_DIR)/svo.c $(SRC_DIR)/svo_physics.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c $(SRC_DIR)/noise.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-tools: $(BUILD_DIR)/test_tool_integration
+	./$(BUILD_DIR)/test_tool_integration
+
+# ============ 3D PHYSICS TESTS ============
+$(BUILD_DIR)/test_3d_physics: $(TEST_DIR)/test_3d_physics.c $(SRC_DIR)/svo.c $(SRC_DIR)/svo_physics.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c $(SRC_DIR)/noise.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-3d-physics: $(BUILD_DIR)/test_3d_physics
+	./$(BUILD_DIR)/test_3d_physics
+
+# ============ ENERGY CONSERVATION TESTS ============
+$(BUILD_DIR)/test_energy_conservation: $(TEST_DIR)/test_energy_conservation.c $(SRC_DIR)/svo.c $(SRC_DIR)/svo_physics.c $(SRC_DIR)/terrain.c $(SRC_DIR)/tree.c $(SRC_DIR)/noise.c $(SRC_DIR)/octree.c $(SRC_DIR)/attractor_octree.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+test-energy: $(BUILD_DIR)/test_energy_conservation
+	./$(BUILD_DIR)/test_energy_conservation
+
 # ============ ALL PHYSICS TESTS ============
 test-physics: test-conservation test-flow test-phase
 	@echo ""
@@ -223,4 +270,4 @@ tune-dry-run: $(TUNE_TARGET)
 tune-clean:
 	rm -rf terrain_output $(TUNE_TARGET)
 
-.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-thermo test-conservation test-flow test-phase test-physics tune-terrain tune-init tune-single tune-dry-run tune-clean
+.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-thermo test-conservation test-flow test-phase test-physics test-tools tune-terrain tune-init tune-single tune-dry-run tune-clean

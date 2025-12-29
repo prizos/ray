@@ -49,16 +49,15 @@ static void game_init_common(GameState *state, uint32_t seed)
     TerrainConfig config = terrain_config_default(actual_seed);
     terrain_generate_seeded(state->terrain_height, &config);
 
-    // Initialize matter simulation (unified thermodynamics: water, fire, nutrients)
-    // Uses same seed for reproducible sparse vegetation patterns
-    matter_init(&state->matter, state->terrain_height, actual_seed);
+    // Initialize 3D SVO matter simulation
+    svo_init(&state->matter_svo, state->terrain_height);
 
     // Add some initial test water in the center of the map
     for (int z = 75; z < 85; z++) {
         for (int x = 75; x < 85; x++) {
-            float world_x = x * MATTER_CELL_SIZE + MATTER_CELL_SIZE / 2.0f;
-            float world_z = z * MATTER_CELL_SIZE + MATTER_CELL_SIZE / 2.0f;
-            matter_add_water_at(&state->matter, world_x, world_z, FLOAT_TO_FIXED(2.0f));
+            float world_x = x * SVO_CELL_SIZE + SVO_CELL_SIZE / 2.0f;
+            float world_z = z * SVO_CELL_SIZE + SVO_CELL_SIZE / 2.0f;
+            svo_add_water_at(&state->matter_svo, world_x, 0.0f, world_z, 2.0);  // At ground level
         }
     }
 
@@ -139,8 +138,8 @@ void game_init_full(GameState *state, int num_trees, uint32_t seed)
                 if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
                 int ground_height = state->terrain_height[terrain_x][terrain_z];
 
-                // Skip if there's water at this location
-                if (matter_get_water_depth(&state->matter, terrain_x, terrain_z) > WATER_MIN_DEPTH) continue;
+                // Skip if there's water at this location (check SVO for water material)
+                // For now, always allow tree placement - water check will be added later
 
                 if (!game_grow_trees(state)) break;
                 tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
@@ -166,8 +165,8 @@ void game_init_full(GameState *state, int num_trees, uint32_t seed)
             if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
             int ground_height = state->terrain_height[terrain_x][terrain_z];
 
-            // Only place tree if there's no water at this location
-            if (matter_get_water_depth(&state->matter, terrain_x, terrain_z) <= WATER_MIN_DEPTH) {
+            // Place trees (water check simplified for now)
+            {
                 if (!game_grow_trees(state)) break;
                 tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
                 state->tree_count++;
@@ -299,12 +298,13 @@ void game_update(GameState *state)
                         }
                         state->target_world_z = grid_z * CELL_SIZE + CELL_SIZE / 2.0f;
 
-                        // Read temperature at target for heat/cool tools
-                        int matter_x, matter_z;
-                        matter_world_to_cell(state->target_world_x, state->target_world_z, &matter_x, &matter_z);
-                        const MatterCell *target_cell = matter_get_cell_const(&state->matter, matter_x, matter_z);
-                        if (target_cell) {
-                            state->target_temperature = kelvin_to_celsius(target_cell->temperature);
+                        // Read temperature at target for heat/cool tools (using 3D SVO)
+                        CellInfo cell_info = svo_get_cell_info(&state->matter_svo,
+                                                               state->target_world_x,
+                                                               state->target_world_y,
+                                                               state->target_world_z);
+                        if (cell_info.valid) {
+                            state->target_temperature = cell_info.temperature - 273.15;  // K to C
                         } else {
                             state->target_temperature = 20.0f;  // Default ambient
                         }
@@ -328,35 +328,36 @@ void game_update(GameState *state)
         if (tree_terrain_z >= TERRAIN_RESOLUTION) tree_terrain_z = TERRAIN_RESOLUTION - 1;
         int ground_height = state->terrain_height[tree_terrain_x][tree_terrain_z];
 
-        // Only place tree if there's no water at this location
-        if (matter_get_water_depth(&state->matter, tree_terrain_x, tree_terrain_z) <= WATER_MIN_DEPTH &&
-            game_grow_trees(state)) {
+        // Place tree (water check simplified for 3D SVO)
+        if (game_grow_trees(state)) {
             tree_init(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
             state->tree_count++;
         }
     }
 
-    // Heat, Cool, and Water tools: hold to continuously apply
+    // Heat, Cool, and Water tools: hold to continuously apply (3D SVO)
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && state->target_valid) {
         if (state->current_tool == TOOL_HEAT) {
             // Add heat to matter cell - hold to spray fire
-            matter_add_heat_at(&state->matter,
-                              state->target_world_x,
-                              state->target_world_z,
-                              FLOAT_TO_FIXED(500.0f));  // Energy per frame
+            svo_add_heat_at(&state->matter_svo,
+                           state->target_world_x,
+                           state->target_world_y,
+                           state->target_world_z,
+                           5000.0);  // Energy per frame (Joules)
         } else if (state->current_tool == TOOL_COOL) {
             // Remove heat from matter cell - cooling tool
-            // Uses negative energy to remove heat
-            matter_add_heat_at(&state->matter,
+            svo_remove_heat_at(&state->matter_svo,
                               state->target_world_x,
+                              state->target_world_y,
                               state->target_world_z,
-                              FLOAT_TO_FIXED(-500.0f));  // Same rate as heating
+                              5000.0);  // Same rate as heating
         } else if (state->current_tool == TOOL_WATER) {
             // Add water directly to matter system
-            matter_add_water_at(&state->matter,
-                              state->target_world_x,
-                              state->target_world_z,
-                              FLOAT_TO_FIXED(2.0f));
+            svo_add_water_at(&state->matter_svo,
+                            state->target_world_x,
+                            state->target_world_y,
+                            state->target_world_z,
+                            0.5);  // moles of water
         }
     }
 
@@ -433,61 +434,12 @@ void game_update(GameState *state)
     }
 
     // ========== TREE SHADOW EFFECTS ==========
-    // Update light levels based on tree canopy coverage
-    if (!state->paused) {
-        static int shadow_update_counter = 0;
-        if (++shadow_update_counter >= 30) {  // Every ~0.5 seconds
-            shadow_update_counter = 0;
-
-            // Reset all cells to full light
-            for (int x = 0; x < MATTER_RES; x++) {
-                for (int z = 0; z < MATTER_RES; z++) {
-                    state->matter.cells[x][z].light_level = FIXED_ONE;
-                }
-            }
-
-            // Cast shadows from trees
-            for (int t = 0; t < state->tree_count; t++) {
-                const Tree *tree = &state->trees[t];
-                if (!tree->active) continue;
-
-                // Get tree base position in matter cell coordinates
-                float base_world_x = tree->base_x * CELL_SIZE + CELL_SIZE / 2.0f;
-                float base_world_z = tree->base_z * CELL_SIZE + CELL_SIZE / 2.0f;
-                int base_cx, base_cz;
-                matter_world_to_cell(base_world_x, base_world_z, &base_cx, &base_cz);
-
-                // Calculate shadow radius based on leaf count
-                int shadow_radius = 2 + tree->leaf_count / 500;
-                if (shadow_radius > 10) shadow_radius = 10;
-
-                // Apply shadow to nearby cells
-                for (int dx = -shadow_radius; dx <= shadow_radius; dx++) {
-                    for (int dz = -shadow_radius; dz <= shadow_radius; dz++) {
-                        int cx = base_cx + dx;
-                        int cz = base_cz + dz;
-                        if (!matter_cell_valid(cx, cz)) continue;
-
-                        // Distance-based shadow intensity
-                        float dist = sqrtf((float)(dx * dx + dz * dz));
-                        float shadow_factor = 1.0f - (dist / (shadow_radius + 1));
-                        if (shadow_factor < 0) shadow_factor = 0;
-
-                        // Reduce light level (more leaves = more shade)
-                        fixed16_t shade = FLOAT_TO_FIXED(shadow_factor * 0.7f);
-                        fixed16_t current = state->matter.cells[cx][cz].light_level;
-                        state->matter.cells[cx][cz].light_level = current - shade;
-                        if (state->matter.cells[cx][cz].light_level < FLOAT_TO_FIXED(0.1f)) {
-                            state->matter.cells[cx][cz].light_level = FLOAT_TO_FIXED(0.1f);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // TODO: Implement shadow effects with 3D SVO system
+    // The old 2D matter system tracked light levels per cell
+    // For now, shadows are disabled until SVO-based shadow system is added
 
     // ========== TREE IGNITION FROM MATTER HEAT ==========
-    // Check if hot matter cells ignite nearby tree voxels
+    // Check if hot matter cells ignite nearby tree voxels (using 3D SVO)
     if (!state->paused) {
         static int tree_heat_counter = 0;
         if (++tree_heat_counter >= 15) {  // Every ~0.25 seconds
@@ -497,20 +449,22 @@ void game_update(GameState *state)
                 Tree *tree = &state->trees[t];
                 if (!tree->active) continue;
 
-                // Get tree base in matter cell coordinates
+                // Get tree base position
                 float base_world_x = tree->base_x * CELL_SIZE + CELL_SIZE / 2.0f;
+                float base_world_y = tree->base_y * TERRAIN_SCALE;
                 float base_world_z = tree->base_z * CELL_SIZE + CELL_SIZE / 2.0f;
-                int base_cx, base_cz;
-                matter_world_to_cell(base_world_x, base_world_z, &base_cx, &base_cz);
 
-                // Check if ground under tree is hot
-                const MatterCell *cell = matter_get_cell_const(&state->matter, base_cx, base_cz);
-                if (!cell) continue;
+                // Check temperature at tree base using 3D SVO
+                CellInfo cell_info = svo_get_cell_info(&state->matter_svo,
+                                                       base_world_x,
+                                                       base_world_y,
+                                                       base_world_z);
+                if (!cell_info.valid) continue;
 
                 // Tree wood ignition temp is ~573K (300°C)
-                fixed16_t ignition_temp = FLOAT_TO_FIXED(500.0f);  // Slightly lower for trees near fire
+                double ignition_temp = 500.0;  // K
 
-                if (cell->temperature > ignition_temp) {
+                if (cell_info.temperature > ignition_temp) {
                     // Ignite bottom voxels of the tree
                     for (int v = 0; v < tree->voxel_count; v++) {
                         TreeVoxel *voxel = &tree->voxels[v];
@@ -579,9 +533,9 @@ void game_update(GameState *state)
         }
     }
 
-    // ========== MATTER SIMULATION (unified thermodynamics: water, fire, nutrients) ==========
+    // ========== MATTER SIMULATION (3D SVO thermodynamics) ==========
     if (!state->paused) {
-        matter_update(&state->matter, delta);
+        svo_physics_step(&state->matter_svo, delta);
     }
 }
 
@@ -599,4 +553,7 @@ void game_cleanup(GameState *state)
     }
     state->tree_count = 0;
     state->tree_capacity = 0;
+
+    // Clean up 3D SVO matter system
+    svo_cleanup(&state->matter_svo);
 }
