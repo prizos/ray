@@ -13,10 +13,9 @@
 #include <string.h>
 #include <math.h>
 
-// Include matter and water systems directly for testing
+// Include matter system directly for testing
 #include "../src/matter.c"
 #include "../src/noise.c"
-#include "../src/water.c"
 
 // ============ TEST INFRASTRUCTURE ============
 
@@ -87,24 +86,26 @@ static void create_sloped_terrain(int terrain[MATTER_RES][MATTER_RES], int min_h
     }
 }
 
-// Run N simulation steps (matter only)
+// Run N simulation steps
 static void run_matter_steps(MatterState *state, int steps) {
     for (int i = 0; i < steps; i++) {
         matter_step(state);
     }
 }
 
-// Run N water simulation steps
-static void run_water_steps(WaterState *water, int steps) {
-    for (int i = 0; i < steps; i++) {
-        water_step(water);
-    }
+// Get water depth at position
+static float get_water_at(const MatterState *state, int x, int z) {
+    if (x < 0 || x >= MATTER_RES || z < 0 || z >= MATTER_RES) return 0;
+    return FIXED_TO_FLOAT(CELL_H2O_LIQUID(&state->cells[x][z]));
 }
 
-// Get total water at a position
-static float get_water_at(const WaterState *water, int x, int z) {
-    if (x < 0 || x >= WATER_RESOLUTION || z < 0 || z >= WATER_RESOLUTION) return 0;
-    return FIXED_TO_FLOAT(water->cells[x][z].water_height);
+// Add water at ambient temperature (properly handles energy)
+static void add_water_with_energy(MatterCell *cell, fixed16_t mass) {
+    CELL_H2O_LIQUID(cell) += mass;
+    // Add energy for the water at ambient temperature (293K)
+    fixed16_t energy_for_water = fixed_mul(fixed_mul(mass, SPECIFIC_HEAT_H2O_LIQUID), AMBIENT_TEMP);
+    cell->energy += energy_for_water;
+    cell_update_cache(cell);
 }
 
 // ============ SOLIDS STAY PUT TESTS ============
@@ -280,42 +281,42 @@ void test_cellulose_does_not_flow(void) {
 void test_water_flows_to_lower_terrain(void) {
     TEST("water flows to lower terrain");
 
-    // Create sloped terrain at water resolution (water_init expects int, not fixed)
-    int water_terrain[WATER_RESOLUTION][WATER_RESOLUTION];
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
+    // Create sloped terrain
+    int terrain[MATTER_RES][MATTER_RES];
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
             // Linear slope from left (high=10) to right (low=2)
-            water_terrain[x][z] = 10 - (x * 8 / WATER_RESOLUTION);
+            terrain[x][z] = 10 - (x * 8 / MATTER_RES);
         }
     }
 
-    WaterState water;
-    water_init(&water, water_terrain);
+    MatterState state;
+    matter_init(&state, terrain, 55555);
 
-    // Add water to high side (left)
-    int center = WATER_RESOLUTION / 2;
+    // Add water to high side (left) - with proper energy at ambient temp
+    int center = MATTER_RES / 2;
     for (int x = 5; x < 15; x++) {
         for (int z = center - 5; z < center + 5; z++) {
-            water.cells[x][z].water_height = FLOAT_TO_FIXED(5.0f);
+            add_water_with_energy(&state.cells[x][z], FLOAT_TO_FIXED(5.0f));
         }
     }
 
     // Get total water before
     float total_before = 0;
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
-            total_before += get_water_at(&water, x, z);
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            total_before += get_water_at(&state, x, z);
         }
     }
 
-    // Run water simulation
-    run_water_steps(&water, 500);
+    // Run matter simulation
+    run_matter_steps(&state, 500);
 
     // Get total water after
     float total_after = 0;
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
-            total_after += get_water_at(&water, x, z);
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            total_after += get_water_at(&state, x, z);
         }
     }
 
@@ -323,14 +324,14 @@ void test_water_flows_to_lower_terrain(void) {
     float water_at_start = 0;
     for (int x = 5; x < 15; x++) {
         for (int z = center - 5; z < center + 5; z++) {
-            water_at_start += get_water_at(&water, x, z);
+            water_at_start += get_water_at(&state, x, z);
         }
     }
 
     float water_downstream = 0;
     for (int x = 20; x < 60; x++) {  // Downstream from original location
         for (int z = center - 10; z < center + 10; z++) {
-            water_downstream += get_water_at(&water, x, z);
+            water_downstream += get_water_at(&state, x, z);
         }
     }
 
@@ -346,38 +347,39 @@ void test_water_flows_to_lower_terrain(void) {
 void test_water_pools_in_depression(void) {
     TEST("water pools in depression");
 
-    // Create valley terrain at water resolution
-    int water_terrain[WATER_RESOLUTION][WATER_RESOLUTION];
-    int valley_start = 30;  // ~center of 80
-    int valley_end = 50;
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
+    // Create valley terrain
+    int terrain[MATTER_RES][MATTER_RES];
+    int valley_start = 60;
+    int valley_end = 100;
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
             if (x >= valley_start && x < valley_end && z >= valley_start && z < valley_end) {
-                water_terrain[x][z] = 3;  // Valley floor
+                terrain[x][z] = 3;  // Valley floor
             } else {
-                water_terrain[x][z] = 8;  // Rim
+                terrain[x][z] = 8;  // Rim
             }
         }
     }
 
-    WaterState water;
-    water_init(&water, water_terrain);
+    MatterState state;
+    matter_init(&state, terrain, 66666);
 
-    // Add water to rim (high terrain)
-    for (int x = 10; x < 20; x++) {
-        for (int z = 10; z < 20; z++) {
-            water.cells[x][z].water_height = FLOAT_TO_FIXED(3.0f);
+    // Add water to rim (high terrain) near the valley edge - with proper energy at ambient temp
+    // Valley is at 60-100, so add water just outside the valley at x=50-60
+    for (int x = 50; x < 60; x++) {
+        for (int z = 70; z < 90; z++) {
+            add_water_with_energy(&state.cells[x][z], FLOAT_TO_FIXED(3.0f));
         }
     }
 
     // Run simulation
-    run_water_steps(&water, 500);
+    run_matter_steps(&state, 500);
 
     // Check water accumulated in valley (center)
     float water_in_valley = 0;
     for (int x = valley_start; x < valley_end; x++) {
         for (int z = valley_start; z < valley_end; z++) {
-            water_in_valley += get_water_at(&water, x, z);
+            water_in_valley += get_water_at(&state, x, z);
         }
     }
 
@@ -388,31 +390,27 @@ void test_water_pools_in_depression(void) {
 void test_water_spreads_on_flat_surface(void) {
     TEST("water spreads on flat surface");
 
-    // Create flat terrain at water resolution
-    int water_terrain[WATER_RESOLUTION][WATER_RESOLUTION];
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
-            water_terrain[x][z] = 5;
-        }
-    }
+    // Create flat terrain
+    int terrain[MATTER_RES][MATTER_RES];
+    create_flat_terrain(terrain, 5);
 
-    WaterState water;
-    water_init(&water, water_terrain);
+    MatterState state;
+    matter_init(&state, terrain, 77777);
 
-    // Add water to center area (not just one cell - needs enough to create pressure)
-    int center = WATER_RESOLUTION / 2;
+    // Add water to center area - with proper energy at ambient temp
+    int center = MATTER_RES / 2;
     for (int dx = -2; dx <= 2; dx++) {
         for (int dz = -2; dz <= 2; dz++) {
-            water.cells[center+dx][center+dz].water_height = FLOAT_TO_FIXED(5.0f);
+            add_water_with_energy(&state.cells[center+dx][center+dz], FLOAT_TO_FIXED(5.0f));
         }
     }
 
-    float center_before = get_water_at(&water, center, center);
+    float center_before = get_water_at(&state, center, center);
 
-    // Run more steps for flat terrain spreading
-    run_water_steps(&water, 500);
+    // Run simulation
+    run_matter_steps(&state, 500);
 
-    float center_after = get_water_at(&water, center, center);
+    float center_after = get_water_at(&state, center, center);
 
     // Water should have spread out from center (center height decreases)
     ASSERT(center_after < center_before, "water didn't spread from center");
@@ -422,7 +420,7 @@ void test_water_spreads_on_flat_surface(void) {
     for (int dx = -5; dx <= 5; dx++) {
         for (int dz = -5; dz <= 5; dz++) {
             if (abs(dx) == 5 || abs(dz) == 5) {  // Outer ring only
-                outer_water += get_water_at(&water, center+dx, center+dz);
+                outer_water += get_water_at(&state, center+dx, center+dz);
             }
         }
     }
@@ -434,39 +432,39 @@ void test_water_spreads_on_flat_surface(void) {
 void test_liquid_blocked_by_higher_terrain(void) {
     TEST("liquid blocked by higher terrain");
 
-    // Create terrain with a wall at water resolution
-    int water_terrain[WATER_RESOLUTION][WATER_RESOLUTION];
-    int wall_x = WATER_RESOLUTION / 2;  // Wall in center
+    // Create terrain with a wall
+    int terrain[MATTER_RES][MATTER_RES];
+    int wall_x = MATTER_RES / 2;  // Wall in center
 
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
+    for (int x = 0; x < MATTER_RES; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
             // Create wall in center (4 cells wide)
             if (x >= wall_x - 2 && x < wall_x + 2) {
-                water_terrain[x][z] = 15; // High wall
+                terrain[x][z] = 15; // High wall
             } else {
-                water_terrain[x][z] = 3;  // Low ground
+                terrain[x][z] = 3;  // Low ground
             }
         }
     }
 
-    WaterState water;
-    water_init(&water, water_terrain);
+    MatterState state;
+    matter_init(&state, terrain, 88888);
 
-    // Add water on left side of wall
+    // Add water on left side of wall - with proper energy at ambient temp
     for (int x = 10; x < 25; x++) {
-        for (int z = 30; z < 50; z++) {
-            water.cells[x][z].water_height = FLOAT_TO_FIXED(5.0f);
+        for (int z = 60; z < 100; z++) {
+            add_water_with_energy(&state.cells[x][z], FLOAT_TO_FIXED(5.0f));
         }
     }
 
     // Run simulation
-    run_water_steps(&water, 500);
+    run_matter_steps(&state, 500);
 
     // Check water on right side of wall (should be minimal)
     float water_right = 0;
-    for (int x = wall_x + 5; x < WATER_RESOLUTION - 5; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
-            water_right += get_water_at(&water, x, z);
+    for (int x = wall_x + 5; x < MATTER_RES - 5; x++) {
+        for (int z = 0; z < MATTER_RES; z++) {
+            water_right += get_water_at(&state, x, z);
         }
     }
 
@@ -481,40 +479,47 @@ void test_liquid_blocked_by_higher_terrain(void) {
 void test_ice_blocks_water_flow(void) {
     TEST("ice blocks water inflow");
 
-    // Create flat terrain at water resolution
-    int water_terrain[WATER_RESOLUTION][WATER_RESOLUTION];
-    for (int x = 0; x < WATER_RESOLUTION; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
-            water_terrain[x][z] = 5;
-        }
-    }
+    // Create flat terrain
+    int terrain[MATTER_RES][MATTER_RES];
+    create_flat_terrain(terrain, 5);
 
-    WaterState water;
-    water_init(&water, water_terrain);
+    MatterState state;
+    matter_init(&state, terrain, 99999);
 
-    // Create ice barrier in center
-    int center = WATER_RESOLUTION / 2;
+    // Create ice barrier in center (cold cells with ice)
+    int center = MATTER_RES / 2;
     for (int x = center - 2; x < center + 2; x++) {
-        for (int z = 0; z < WATER_RESOLUTION; z++) {
-            water.ice_height[x][z] = FLOAT_TO_FIXED(5.0f);
+        for (int z = 0; z < MATTER_RES; z++) {
+            CELL_H2O_ICE(&state.cells[x][z]) = FLOAT_TO_FIXED(5.0f);
+            // Keep cells cold so ice doesn't melt
+            state.cells[x][z].energy = fixed_mul(state.cells[x][z].thermal_mass, FLOAT_TO_FIXED(260.0f));
+            cell_update_cache(&state.cells[x][z]);
         }
     }
 
-    // Add water on one side of ice
+    // Add water on one side of ice - with proper energy at ambient temp
     for (int x = 10; x < center - 5; x++) {
         for (int z = center - 10; z < center + 10; z++) {
-            water.cells[x][z].water_height = FLOAT_TO_FIXED(3.0f);
+            add_water_with_energy(&state.cells[x][z], FLOAT_TO_FIXED(3.0f));
         }
     }
 
-    // Run simulation
-    run_water_steps(&water, 500);
+    // Run simulation (keeping ice cold)
+    for (int i = 0; i < 500; i++) {
+        matter_step(&state);
+        // Keep ice barrier cold
+        for (int x = center - 2; x < center + 2; x++) {
+            for (int z = 0; z < MATTER_RES; z++) {
+                state.cells[x][z].energy = fixed_mul(state.cells[x][z].thermal_mass, FLOAT_TO_FIXED(260.0f));
+            }
+        }
+    }
 
     // Check water on other side of ice (should be minimal)
     float water_blocked_side = 0;
-    for (int x = center + 5; x < WATER_RESOLUTION - 5; x++) {
+    for (int x = center + 5; x < MATTER_RES - 5; x++) {
         for (int z = center - 10; z < center + 10; z++) {
-            water_blocked_side += get_water_at(&water, x, z);
+            water_blocked_side += get_water_at(&state, x, z);
         }
     }
 

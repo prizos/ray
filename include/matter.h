@@ -2,7 +2,7 @@
 #define MATTER_H
 
 #include "raylib.h"
-#include "water.h"  // For fixed-point types
+#include "fixed.h"  // Fixed-point types
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -16,12 +16,18 @@
 #define MATTER_UPDATE_DT (1.0f / MATTER_UPDATE_HZ)
 
 // Temperature constants (in Kelvin, stored as fixed16_t)
-#define KELVIN_ZERO       FLOAT_TO_FIXED(273.15f)  // 0°C in Kelvin
-#define AMBIENT_TEMP      FLOAT_TO_FIXED(293.15f)  // 20°C
+// Use exact integer values to prevent fixed-point rounding drift
+#define KELVIN_ZERO       (273 << FIXED_SHIFT)  // ~0°C in Kelvin (exact in fixed-point)
+#define AMBIENT_TEMP      (293 << FIXED_SHIFT)  // ~20°C (exact in fixed-point)
 
 // Energy transfer rates
 #define CONDUCTION_RATE      FLOAT_TO_FIXED(0.05f)  // Heat transfer coefficient
 #define RADIATION_RATE       FLOAT_TO_FIXED(0.002f) // Radiative exchange with environment
+
+// Quantum units - minimum discrete transfer to prevent fixed-point drift
+// Transfers below quantum are not applied (energy is conserved, not lost to rounding)
+#define ENERGY_QUANTUM       1  // Minimum energy transfer (1 unit in fixed16_t = 1/65536)
+#define MASS_QUANTUM         1  // Minimum mass transfer
 
 // ============ SUBSTANCES ============
 // Based on real physical/chemical properties
@@ -176,8 +182,9 @@ extern const SubstanceProps SUBST_PROPS[SUBST_COUNT];
 #define SPECIFIC_HEAT_WATER     SPECIFIC_HEAT_H2O_LIQUID
 #define SPECIFIC_HEAT_STEAM     SPECIFIC_HEAT_H2O_GAS
 
-// Water-matter sync constant
+// Water constants
 #define WATER_MASS_PER_DEPTH    FLOAT_TO_FIXED(1.0f)  // g water per unit depth
+#define WATER_MIN_DEPTH         FLOAT_TO_FIXED(0.01f) // Threshold for water presence checks
 
 // Phase transition rate limit (prevents instability)
 #define PHASE_TRANSITION_RATE   FLOAT_TO_FIXED(0.1f)  // max mass per tick
@@ -344,16 +351,10 @@ void cell_process_phase_transition(MatterCell *cell, PhaseableSubstance ps);
 // Flow liquids (water and lava) based on terrain slope and viscosity
 void matter_flow_liquids(MatterState *state);
 
-// ============ API: WATER SYNC ============
+// ============ API: WATER QUERIES ============
 
-// Forward declaration for water state
-struct WaterState;
-
-// Sync liquid water from water simulation to matter system
-void matter_sync_from_water(MatterState *matter, const struct WaterState *water);
-
-// Sync liquid water from matter system back to water simulation
-void matter_sync_to_water(const MatterState *matter, struct WaterState *water);
+// Get liquid water depth at cell (for checking water presence)
+fixed16_t matter_get_water_depth(const MatterState *state, int x, int z);
 
 // Get total H2O mass in a cell (all phases)
 fixed16_t cell_total_h2o(const MatterCell *cell);

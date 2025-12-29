@@ -90,16 +90,12 @@ $(BUILD_DIR)/test_%: $(TEST_DIR)/test_%.c | $(BUILD_DIR)
 
 # Specific rules for tests that need source file dependencies
 
-# Matter system test (needs matter.c, noise.c, water.c)
-$(BUILD_DIR)/test_matter_system: $(TEST_DIR)/test_matter_system.c $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c $(SRC_DIR)/water.c | $(BUILD_DIR)
+# Matter system test (needs matter.c, noise.c)
+$(BUILD_DIR)/test_matter_system: $(TEST_DIR)/test_matter_system.c $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
-# Matter integration test (needs matter.c, noise.c, water.c)
-$(BUILD_DIR)/test_matter_integration: $(TEST_DIR)/test_matter_integration.c $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c $(SRC_DIR)/water.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
-
-# Water-matter integration test
-$(BUILD_DIR)/test_water_matter_integration: $(TEST_DIR)/test_water_matter_integration.c $(SRC_DIR)/matter.c $(SRC_DIR)/water.c $(SRC_DIR)/noise.c | $(BUILD_DIR)
+# Matter integration test (needs matter.c, noise.c)
+$(BUILD_DIR)/test_matter_integration: $(TEST_DIR)/test_matter_integration.c $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Noise test (needs noise.c)
@@ -145,7 +141,7 @@ test-matter-integration: $(BUILD_DIR)
 
 # Matter system tests (full engine with designed maps)
 # Requires linking with actual matter.c and dependencies
-MATTER_TEST_DEPS = $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c $(SRC_DIR)/water.c
+MATTER_TEST_DEPS = $(SRC_DIR)/matter.c $(SRC_DIR)/noise.c
 test-matter-system: $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(TEST_DIR)/test_matter_system.c $(MATTER_TEST_DEPS) -o $(BUILD_DIR)/test_matter_system $(LDFLAGS)
 	./$(BUILD_DIR)/test_matter_system
@@ -154,24 +150,6 @@ test-matter-system: $(BUILD_DIR)
 test-matter: test-matter-unit test-matter-integration test-matter-system
 	@echo ""
 	@echo "All matter tests passed!"
-
-# ============ WATER-MATTER SYSTEM TESTS ============
-# Tests for water-matter interaction (phase transitions, suppression, etc.)
-
-# Water-matter unit tests (isolated theory validation)
-test-water-matter-unit: $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(TEST_DIR)/test_water_matter_unit.c -o $(BUILD_DIR)/test_water_matter_unit $(LDFLAGS)
-	./$(BUILD_DIR)/test_water_matter_unit
-
-# Water-matter integration tests (grid simulation with both systems)
-test-water-matter-integration: $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(TEST_DIR)/test_water_matter_integration.c -o $(BUILD_DIR)/test_water_matter_integration $(LDFLAGS)
-	./$(BUILD_DIR)/test_water_matter_integration
-
-# Run all water-matter tests
-test-water-matter: test-water-matter-unit test-water-matter-integration
-	@echo ""
-	@echo "All water-matter tests passed!"
 
 # ============ CONSERVATION LAW TESTS ============
 # Tests for mass and energy conservation
@@ -184,7 +162,7 @@ test-conservation: $(BUILD_DIR)/test_conservation
 	./$(BUILD_DIR)/test_conservation
 
 # Run ALL thermodynamics tests
-test-thermo: test-matter test-water-matter
+test-thermo: test-matter test-physics
 	@echo ""
 	@echo "All thermodynamics tests passed!"
 
@@ -245,4 +223,4 @@ tune-dry-run: $(TUNE_TARGET)
 tune-clean:
 	rm -rf terrain_output $(TUNE_TARGET)
 
-.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-water-matter test-water-matter-unit test-water-matter-integration test-thermo test-conservation test-flow test-phase test-physics tune-terrain tune-init tune-single tune-dry-run tune-clean
+.PHONY: all run debug clean rebuild test test-growth test-unit test-matter test-matter-unit test-matter-integration test-matter-system test-thermo test-conservation test-flow test-phase test-physics tune-terrain tune-init tune-single tune-dry-run tune-clean

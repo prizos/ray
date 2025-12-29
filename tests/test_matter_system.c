@@ -13,7 +13,7 @@
  * 6. Temperature stability in production-like scenarios
  */
 
-// Include matter.h first (includes water.h with fixed-point definitions)
+// Include matter.h first (includes fixed.h with fixed-point definitions)
 #include "../include/matter.h"
 #include "test_common.h"
 

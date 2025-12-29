@@ -1,5 +1,4 @@
 #include "matter.h"
-#include "water.h"  // For WaterState definition in sync functions
 #include "noise.h"
 #include <string.h>
 #include <stdlib.h>
@@ -602,6 +601,12 @@ void matter_conduct_heat(MatterState *state) {
                 fixed16_t temp_diff = neighbor->temperature - cell->temperature;
                 fixed16_t heat_flow = fixed_mul(temp_diff, CONDUCTION_RATE);
 
+                // Quantum gate: only apply if transfer >= ENERGY_QUANTUM
+                // Sub-quantum transfers are not applied (prevents rounding drift)
+                if (heat_flow > -ENERGY_QUANTUM && heat_flow < ENERGY_QUANTUM) {
+                    continue;  // Below quantum threshold - no transfer
+                }
+
                 // Limit transfer to prevent instability (max 5% of donor's energy per neighbor)
                 if (heat_flow > 0 && neighbor->energy > 0) {
                     fixed16_t max_transfer = neighbor->energy / 20;
@@ -615,10 +620,24 @@ void matter_conduct_heat(MatterState *state) {
             }
 
             // Radiative heat exchange with environment
-            // Net radiation = rate * (T_cell - T_ambient)
-            // Positive excess = lose heat, negative excess = gain heat
-            fixed16_t temp_excess = cell->temperature - AMBIENT_TEMP;
-            fixed16_t radiation = fixed_mul(temp_excess, RADIATION_RATE);
+            // Calculate equilibrium energy: this is the energy the cell would have at AMBIENT_TEMP
+            // By computing this the same way energy is initialized, we avoid rounding asymmetry
+            fixed16_t equilibrium_energy = fixed_mul(cell->thermal_mass, AMBIENT_TEMP);
+            fixed16_t energy_excess = cell->energy - equilibrium_energy;
+
+            // Radiation is proportional to energy excess (which is proportional to temp excess)
+            // radiation = (energy_excess / thermal_mass) * RADIATION_RATE
+            // Reorder to avoid division: radiation = (energy_excess * RADIATION_RATE) / thermal_mass
+            // This preserves more precision and gives exactly 0 when at equilibrium
+            fixed16_t radiation = 0;
+            if (energy_excess != 0 && cell->thermal_mass > 0) {
+                radiation = fixed_div(fixed_mul(energy_excess, RADIATION_RATE), cell->thermal_mass);
+            }
+
+            // Quantum gate: only apply if radiation magnitude >= ENERGY_QUANTUM
+            if (radiation > -ENERGY_QUANTUM && radiation < ENERGY_QUANTUM) {
+                radiation = 0;  // Below quantum threshold - no radiation
+            }
 
             // Limit radiation to prevent going negative
             if (radiation > 0) {
@@ -709,10 +728,23 @@ static fixed16_t* cell_get_gas_ptr(MatterCell *cell, int gas_index) {
     }
 }
 
+// Helper to get specific heat for a gas by index
+static fixed16_t get_gas_specific_heat(int gas_index) {
+    switch (gas_index) {
+        case 0: return get_phaseable_specific_heat(PHASEABLE_N2, PHASE_GAS);
+        case 1: return get_phaseable_specific_heat(PHASEABLE_O2, PHASE_GAS);
+        case 2: return SUBST_PROPS[SUBST_CO2].specific_heat;
+        case 3: return SUBST_PROPS[SUBST_SMOKE].specific_heat;
+        default: return FLOAT_TO_FIXED(1.0f);
+    }
+}
+
 void matter_diffuse_gases(MatterState *state) {
-    // Temporary array for mass changes (4 gas types)
+    // Temporary arrays for mass AND energy changes (4 gas types)
     static fixed16_t mass_delta[MATTER_RES][MATTER_RES][4];
+    static fixed16_t energy_delta[MATTER_RES][MATTER_RES];
     memset(mass_delta, 0, sizeof(mass_delta));
+    memset(energy_delta, 0, sizeof(energy_delta));
 
     fixed16_t diffusion_rate = FLOAT_TO_FIXED(0.1f);
 
@@ -731,6 +763,8 @@ void matter_diffuse_gases(MatterState *state) {
                 if (!my_ptr) continue;
                 fixed16_t my_mass = *my_ptr;
 
+                fixed16_t specific_heat = get_gas_specific_heat(g);
+
                 for (int d = 0; d < 4; d++) {
                     int nx = x + dx[d];
                     int nz = z + dz[d];
@@ -743,13 +777,30 @@ void matter_diffuse_gases(MatterState *state) {
                     fixed16_t diff = their_mass - my_mass;
                     fixed16_t transfer = fixed_mul(diff, diffusion_rate);
 
+                    // Quantum gate: only transfer if mass >= MASS_QUANTUM
+                    fixed16_t abs_transfer = (transfer >= 0) ? transfer : -transfer;
+                    if (abs_transfer < MASS_QUANTUM) continue;
+
+                    // Calculate energy to transfer with the diffusing mass
+                    // Positive transfer = mass coming IN from neighbor, use neighbor's temp
+                    // Negative transfer = mass going OUT to neighbor, use our temp
+                    fixed16_t source_temp = (transfer > 0) ? neighbor->temperature : cell->temperature;
+                    fixed16_t energy_transfer = fixed_mul(fixed_mul(abs_transfer, specific_heat), source_temp);
+
+                    // Quantum gate: ensure energy transfer is at least one quantum
+                    if (energy_transfer < ENERGY_QUANTUM) {
+                        energy_transfer = ENERGY_QUANTUM;
+                    }
+                    if (transfer < 0) energy_transfer = -energy_transfer;
+
                     mass_delta[x][z][g] += transfer;
+                    energy_delta[x][z] += energy_transfer;
                 }
             }
         }
     }
 
-    // Apply mass changes
+    // Apply mass and energy changes
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
             for (int g = 0; g < num_gases; g++) {
@@ -758,6 +809,7 @@ void matter_diffuse_gases(MatterState *state) {
                 *ptr += mass_delta[x][z][g];
                 if (*ptr < 0) *ptr = 0;
             }
+            state->cells[x][z].energy += energy_delta[x][z];
         }
     }
 }
@@ -1048,87 +1100,16 @@ uint32_t matter_checksum(const MatterState *state) {
     return sum;
 }
 
-// ============ WATER SYNC ============
+// ============ WATER QUERIES ============
 
-void matter_sync_from_water(MatterState *matter, const struct WaterState *water) {
-    if (!matter || !water) return;
-
-    static int debug_counter = 0;
-
-    for (int x = 0; x < MATTER_RES; x++) {
-        for (int z = 0; z < MATTER_RES; z++) {
-            // Get water depth from water simulation
-            fixed16_t depth = water->cells[x][z].water_height;
-
-            // Convert depth to liquid water mass
-            // WATER_MASS_PER_DEPTH = 1.0 g per unit depth (simplified)
-            fixed16_t new_liquid = fixed_mul(depth, WATER_MASS_PER_DEPTH);
-
-            MatterCell *cell = &matter->cells[x][z];
-            fixed16_t old_liquid = CELL_H2O_LIQUID(cell);
-
-            if (new_liquid != old_liquid) {
-                // Adjust energy for mass change
-                fixed16_t delta = new_liquid - old_liquid;
-
-                // DEBUG: Log significant water changes
-                float delta_f = FIXED_TO_FLOAT(delta);
-                float old_temp = FIXED_TO_FLOAT(cell->temperature);
-                float old_energy = FIXED_TO_FLOAT(cell->energy);
-                float old_thermal = FIXED_TO_FLOAT(cell->thermal_mass);
-
-                if (delta > 0) {
-                    // Water added - bring in at ambient temperature
-                    fixed16_t delta_thermal = fixed_mul(delta, SPECIFIC_HEAT_H2O_LIQUID);
-                    cell->energy += fixed_mul(delta_thermal, AMBIENT_TEMP);
-                } else {
-                    // Water removed - energy leaves with water
-                    fixed16_t delta_thermal = fixed_mul(-delta, SPECIFIC_HEAT_H2O_LIQUID);
-                    cell->energy -= fixed_mul(delta_thermal, cell->temperature);
-                    if (cell->energy < 0) cell->energy = 0;
-                }
-                CELL_H2O_LIQUID(cell) = new_liquid;
-
-                // CRITICAL: Update cache to recalculate thermal mass and temperature
-                cell_update_cache(cell);
-
-                // DEBUG: Log after update
-                if (debug_counter++ % 60 == 0 && (delta_f > 0.5f || delta_f < -0.5f)) {
-                    float new_temp = FIXED_TO_FLOAT(cell->temperature);
-                    float new_energy = FIXED_TO_FLOAT(cell->energy);
-                    float new_thermal = FIXED_TO_FLOAT(cell->thermal_mass);
-                    TraceLog(LOG_INFO, "SYNC [%d,%d]: delta=%.2f, temp %.1f->%.1f, energy %.1f->%.1f, thermal %.1f->%.1f",
-                             x, z, delta_f, old_temp - 273.15f, new_temp - 273.15f,
-                             old_energy, new_energy, old_thermal, new_thermal);
-                }
-            }
-        }
+// Get liquid water depth at cell (for checking water presence)
+// Depth is the liquid water mass (simplified: 1 unit mass = 1 unit depth)
+fixed16_t matter_get_water_depth(const MatterState *state, int x, int z) {
+    if (!state || x < 0 || x >= MATTER_RES || z < 0 || z >= MATTER_RES) {
+        return 0;
     }
-}
-
-void matter_sync_to_water(const MatterState *matter, struct WaterState *water) {
-    if (!matter || !water) return;
-
-    for (int x = 0; x < MATTER_RES; x++) {
-        for (int z = 0; z < MATTER_RES; z++) {
-            const MatterCell *cell = &matter->cells[x][z];
-
-            // Ice acts as solid terrain - blocks water flow
-            // Ice is synced to ice_height (acts like additional terrain)
-            // Only liquid water goes into water_height (can flow)
-            fixed16_t ice_mass = CELL_H2O_ICE(cell);
-            fixed16_t liquid_mass = CELL_H2O_LIQUID(cell);
-
-            // Convert mass to depth
-            fixed16_t ice_depth = fixed_div(ice_mass, WATER_MASS_PER_DEPTH);
-            fixed16_t liquid_depth = fixed_div(liquid_mass, WATER_MASS_PER_DEPTH);
-
-            // Ice raises the effective terrain height - water cannot flow into it
-            water->ice_height[x][z] = ice_depth;
-            // Only liquid water can flow
-            water->cells[x][z].water_height = liquid_depth;
-        }
-    }
+    const MatterCell *cell = &state->cells[x][z];
+    return fixed_div(CELL_H2O_LIQUID(cell), WATER_MASS_PER_DEPTH);
 }
 
 // ============ PHASE TRANSITIONS ============
@@ -1292,12 +1273,15 @@ static fixed16_t get_flow_rate(fixed16_t viscosity) {
 
 // Flow a specific liquid type between cells
 static void flow_liquid_type(MatterState *state, PhaseableSubstance ps, fixed16_t viscosity) {
-    // Temporary delta array for this liquid
+    // Temporary delta arrays for mass AND energy
     static fixed16_t liquid_delta[MATTER_RES][MATTER_RES];
+    static fixed16_t energy_delta[MATTER_RES][MATTER_RES];
     memset(liquid_delta, 0, sizeof(liquid_delta));
+    memset(energy_delta, 0, sizeof(energy_delta));
 
     fixed16_t flow_rate = get_flow_rate(viscosity);
     fixed16_t min_liquid = FLOAT_TO_FIXED(0.01f);  // Minimum to flow
+    fixed16_t specific_heat = get_phaseable_specific_heat(ps, PHASE_LIQUID);
 
     // Neighbor offsets
     const int dx[4] = {-1, 1, 0, 0};
@@ -1310,17 +1294,30 @@ static void flow_liquid_type(MatterState *state, PhaseableSubstance ps, fixed16_
 
             if (my_liquid < min_liquid) continue;
 
-            // Surface height = terrain + liquid depth
-            fixed16_t my_surface = INT_TO_FIXED(cell->terrain_height) + my_liquid;
+            // For water (H2O), ice acts as solid terrain that blocks flow
+            // For other liquids (lava, cryogenic), we don't have solid barriers
+            fixed16_t my_ice = 0;
+            if (ps == PHASEABLE_H2O) {
+                my_ice = cell->phase_mass[PHASEABLE_H2O].solid;
+            }
+
+            // Surface height = terrain + ice (for water) + liquid depth
+            fixed16_t my_surface = INT_TO_FIXED(cell->terrain_height) + my_ice + my_liquid;
 
             for (int d = 0; d < 4; d++) {
                 int nx = x + dx[d];
                 int nz = z + dz[d];
                 MatterCell *neighbor = &state->cells[nx][nz];
 
-                // Neighbor surface height
+                // Neighbor ice height (for water)
+                fixed16_t their_ice = 0;
+                if (ps == PHASEABLE_H2O) {
+                    their_ice = neighbor->phase_mass[PHASEABLE_H2O].solid;
+                }
+
+                // Neighbor surface height (including ice)
                 fixed16_t their_liquid = neighbor->phase_mass[ps].liquid;
-                fixed16_t their_surface = INT_TO_FIXED(neighbor->terrain_height) + their_liquid;
+                fixed16_t their_surface = INT_TO_FIXED(neighbor->terrain_height) + their_ice + their_liquid;
 
                 // Flow from higher to lower surface
                 fixed16_t surface_diff = my_surface - their_surface;
@@ -1332,21 +1329,37 @@ static void flow_liquid_type(MatterState *state, PhaseableSubstance ps, fixed16_
                     fixed16_t max_flow = my_liquid / 4;
                     if (flow > max_flow) flow = max_flow;
 
+                    // Quantum gate: only transfer if mass >= MASS_QUANTUM
+                    if (flow < MASS_QUANTUM) continue;
+
+                    // Calculate energy to transfer with the flowing mass
+                    // Energy = mass * specific_heat * temperature
+                    fixed16_t energy_flow = fixed_mul(fixed_mul(flow, specific_heat), cell->temperature);
+
+                    // Quantum gate: ensure energy transfer is at least one quantum
+                    // If mass flows, energy MUST flow with it to maintain conservation
+                    if (energy_flow < ENERGY_QUANTUM) {
+                        energy_flow = ENERGY_QUANTUM;  // Round up to minimum quantum
+                    }
+
                     // Accumulate deltas (will be applied after all calculations)
                     liquid_delta[x][z] -= flow;
                     liquid_delta[nx][nz] += flow;
+                    energy_delta[x][z] -= energy_flow;
+                    energy_delta[nx][nz] += energy_flow;
                 }
             }
         }
     }
 
-    // Apply deltas
+    // Apply mass and energy deltas
     for (int x = 0; x < MATTER_RES; x++) {
         for (int z = 0; z < MATTER_RES; z++) {
             state->cells[x][z].phase_mass[ps].liquid += liquid_delta[x][z];
             if (state->cells[x][z].phase_mass[ps].liquid < 0) {
                 state->cells[x][z].phase_mass[ps].liquid = 0;
             }
+            state->cells[x][z].energy += energy_delta[x][z];
         }
     }
 }

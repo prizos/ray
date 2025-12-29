@@ -44,19 +44,18 @@ static void game_init_common(GameState *state, uint32_t seed)
     TerrainConfig config = terrain_config_default(actual_seed);
     terrain_generate_seeded(state->terrain_height, &config);
 
-    // Initialize water simulation from terrain
-    water_init(&state->water, state->terrain_height);
+    // Initialize matter simulation (unified thermodynamics: water, fire, nutrients)
+    // Uses same seed for reproducible sparse vegetation patterns
+    matter_init(&state->matter, state->terrain_height, actual_seed);
 
     // Add some initial test water in the center of the map
     for (int z = 75; z < 85; z++) {
         for (int x = 75; x < 85; x++) {
-            water_add(&state->water, x, z, FLOAT_TO_FIXED(2.0f));
+            float world_x = x * MATTER_CELL_SIZE + MATTER_CELL_SIZE / 2.0f;
+            float world_z = z * MATTER_CELL_SIZE + MATTER_CELL_SIZE / 2.0f;
+            matter_add_water_at(&state->matter, world_x, world_z, FLOAT_TO_FIXED(2.0f));
         }
     }
-
-    // Initialize matter simulation (thermodynamic vegetation, fire, nutrients)
-    // Uses same seed for reproducible sparse vegetation patterns
-    matter_init(&state->matter, state->terrain_height, actual_seed);
 
     // Initialize beavers
     beaver_init_all(state->beavers, &state->beaver_count);
@@ -136,7 +135,7 @@ void game_init_full(GameState *state, int num_trees, uint32_t seed)
                 int ground_height = state->terrain_height[terrain_x][terrain_z];
 
                 // Skip if there's water at this location
-                if (water_get_depth(&state->water, terrain_x, terrain_z) > WATER_MIN_DEPTH) continue;
+                if (matter_get_water_depth(&state->matter, terrain_x, terrain_z) > WATER_MIN_DEPTH) continue;
 
                 if (!game_grow_trees(state)) break;
                 tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
@@ -163,7 +162,7 @@ void game_init_full(GameState *state, int num_trees, uint32_t seed)
             int ground_height = state->terrain_height[terrain_x][terrain_z];
 
             // Only place tree if there's no water at this location
-            if (water_get_depth(&state->water, terrain_x, terrain_z) <= WATER_MIN_DEPTH) {
+            if (matter_get_water_depth(&state->matter, terrain_x, terrain_z) <= WATER_MIN_DEPTH) {
                 if (!game_grow_trees(state)) break;
                 tree_init(&state->trees[state->tree_count], x, ground_height, z, TREE_SPACE_COLONIZATION);
                 state->tree_count++;
@@ -293,7 +292,7 @@ void game_update(GameState *state)
         int ground_height = state->terrain_height[tree_terrain_x][tree_terrain_z];
 
         // Only place tree if there's no water at this location
-        if (water_get_depth(&state->water, tree_terrain_x, tree_terrain_z) <= WATER_MIN_DEPTH &&
+        if (matter_get_water_depth(&state->matter, tree_terrain_x, tree_terrain_z) <= WATER_MIN_DEPTH &&
             game_grow_trees(state)) {
             tree_init(&state->trees[state->tree_count], grid_x, ground_height, grid_z, TREE_SPACE_COLONIZATION);
             state->tree_count++;
@@ -316,12 +315,11 @@ void game_update(GameState *state)
                               state->target_world_z,
                               FLOAT_TO_FIXED(-500.0f));  // Same rate as heating
         } else if (state->current_tool == TOOL_WATER) {
-            // Add water ONLY to water simulation
-            // matter_sync_from_water will handle adding to matter system with proper energy
-            water_add_at_world(&state->water,
+            // Add water directly to matter system
+            matter_add_water_at(&state->matter,
                               state->target_world_x,
                               state->target_world_z,
-                              2.0f);  // Reduced rate since sync handles matter
+                              FLOAT_TO_FIXED(2.0f));
         }
     }
 
@@ -395,13 +393,6 @@ void game_update(GameState *state)
                 tree_grow(&state->trees[i]);
             }
         }
-    }
-
-    // ========== WATER-MATTER SYNC (Phase 1: water → matter) ==========
-    // Sync water depth to matter h2o_liquid BEFORE matter simulation
-    // This allows thermodynamics (evaporation, heat absorption) to work on water
-    if (!state->paused) {
-        matter_sync_from_water(&state->matter, &state->water);
     }
 
     // ========== TREE SHADOW EFFECTS ==========
@@ -551,22 +542,9 @@ void game_update(GameState *state)
         }
     }
 
-    // ========== MATTER SIMULATION (thermodynamic vegetation, fire, nutrients) ==========
+    // ========== MATTER SIMULATION (unified thermodynamics: water, fire, nutrients) ==========
     if (!state->paused) {
         matter_update(&state->matter, delta);
-    }
-
-    // ========== WATER-MATTER SYNC (Phase 2: matter → water) ==========
-    // Sync matter h2o_liquid back to water depth AFTER matter simulation
-    // This reflects evaporation (water level drops when boiled)
-    if (!state->paused) {
-        matter_sync_to_water(&state->matter, &state->water);
-    }
-
-    // ========== WATER FLUID DYNAMICS ==========
-    // Run water simulation AFTER matter sync to propagate any water changes
-    if (!state->paused) {
-        water_update(&state->water, delta);
     }
 }
 

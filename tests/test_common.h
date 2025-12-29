@@ -89,9 +89,9 @@ static inline int test_exit_code(void) {
 #define ASSERT_FALSE(cond, msg) ASSERT(!(cond), msg)
 
 // ============ FIXED-POINT MATH ============
-// Only define if not already defined by water.h
+// Only define if not already defined by fixed.h
 
-#ifndef WATER_H  // water.h not included - define our own
+#ifndef FIXED_H  // fixed.h not included - define our own
 
 typedef int32_t fixed16_t;
 
@@ -120,7 +120,7 @@ static inline fixed16_t fixed_div(fixed16_t a, fixed16_t b) {
     }
 }
 
-#endif // WATER_H
+#endif // FIXED_H
 
 // ============ CONSTANTS ============
 

@@ -440,14 +440,15 @@ void render_frame(const GameState *state)
     }
 
     // ========== COLLECT WATER INSTANCES ==========
-    // Using [x][z] indexing to match terrain convention
-    if (state->water.initialized) {
+    // Water is now in the unified matter system
+    if (state->matter.initialized) {
         const float DEPTH_THRESHOLD = 0.05f;  // Minimum depth to render
         const float DEEP_THRESHOLD = 2.0f;    // Depth at which water is "deep"
 
-        for (int x = 0; x < WATER_RESOLUTION; x++) {
-            for (int z = 0; z < WATER_RESOLUTION; z++) {
-                float depth = FIXED_TO_FLOAT(state->water.cells[x][z].water_height);
+        for (int x = 0; x < MATTER_RES; x++) {
+            for (int z = 0; z < MATTER_RES; z++) {
+                const MatterCell *cell = &state->matter.cells[x][z];
+                float depth = FIXED_TO_FLOAT(CELL_H2O_LIQUID(cell));
                 if (depth < DEPTH_THRESHOLD) continue;
 
                 // World position - must match terrain positioning exactly
@@ -456,7 +457,7 @@ void render_frame(const GameState *state)
                 float world_z = z * TERRAIN_SCALE;
 
                 // Terrain height in voxel units
-                int terrain_h = FIXED_TO_INT(state->water.terrain_height[x][z]);
+                int terrain_h = cell->terrain_height;
 
                 // Terrain cube is centered at (terrain_h * TERRAIN_SCALE)
                 // Its TOP is at (terrain_h * TERRAIN_SCALE) + TERRAIN_SCALE/2
@@ -734,10 +735,10 @@ void render_frame(const GameState *state)
     DrawText(TextFormat("  Trunk: %d  Branch: %d  Leaf: %d", trunk_count, branch_count, leaf_count),
              20, SCREEN_HEIGHT - 63, 11, LIGHTGRAY);
 
-    // Water info
+    // Water info - calculate total from matter system
     int water_cells = instanceCounts[GROUP_WATER_SHALLOW] + instanceCounts[GROUP_WATER_DEEP];
-    float total_water = FIXED_TO_FLOAT(water_calculate_total(&state->water));
-    DrawText(TextFormat("Water: %.0f units (%d cells)  Beavers: %d",
+    float total_water = FIXED_TO_FLOAT(matter_total_mass(&state->matter, SUBST_H2O));
+    DrawText(TextFormat("H2O: %.0f units (%d cells)  Beavers: %d",
              total_water, water_cells, state->beaver_count),
              20, SCREEN_HEIGHT - 46, 11, (Color){ 80, 170, 220, 255 });
 

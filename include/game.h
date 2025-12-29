@@ -5,7 +5,6 @@
 #include "tree.h"
 #include "terrain.h"
 #include "beaver.h"
-#include "water.h"
 #include "matter.h"
 #include <stdint.h>
 
@@ -58,10 +57,7 @@ typedef struct GameState {
     // Terrain
     int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
 
-    // Water simulation
-    WaterState water;
-
-    // Matter simulation (thermodynamic vegetation, fire, nutrients)
+    // Matter simulation (unified thermodynamics: water, fire, nutrients)
     MatterState matter;
 
     // Trees (dynamically allocated, grows as needed)
