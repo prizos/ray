@@ -1,0 +1,6 @@
+# Ray build options
+
+option('debug_metrics',
+  type: 'boolean',
+  value: false,
+  description: 'Enable runtime debug metrics (DEBUG_METRICS flag)')

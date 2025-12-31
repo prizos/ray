@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include "game.h"
 #include "render.h"
+#include "debug_metrics.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,7 @@ typedef struct {
     bool benchmark_mode;
     float benchmark_duration;
     char output_file[256];
+    bool debug_mode;         // Enable debug metrics output
 } Config;
 
 typedef struct {
@@ -37,6 +39,7 @@ static void print_usage(const char *program) {
     printf("  -b, --benchmark     Run in benchmark mode (auto-exit after duration)\n");
     printf("  -d, --duration N    Benchmark duration in seconds (default: 10)\n");
     printf("  -o, --output FILE   Output file for benchmark results\n");
+    printf("  -D, --debug         Enable debug metrics output (1/sec)\n");
     printf("  -h, --help          Show this help message\n");
 }
 
@@ -46,7 +49,8 @@ static Config parse_args(int argc, char *argv[]) {
         .seed = 0,        // 0 means random seed
         .benchmark_mode = false,
         .benchmark_duration = 10.0f,
-        .output_file = ""
+        .output_file = "",
+        .debug_mode = false
     };
 
     for (int i = 1; i < argc; i++) {
@@ -68,6 +72,8 @@ static Config parse_args(int argc, char *argv[]) {
             if (i + 1 < argc) {
                 strncpy(config.output_file, argv[++i], sizeof(config.output_file) - 1);
             }
+        } else if (strcmp(argv[i], "-D") == 0 || strcmp(argv[i], "--debug") == 0) {
+            config.debug_mode = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             exit(0);
@@ -200,6 +206,15 @@ int main(int argc, char *argv[])
 {
     Config config = parse_args(argc, argv);
 
+    // Initialize debug metrics (enabled via -D/--debug or compile-time DEBUG_METRICS)
+#ifdef DEBUG_METRICS
+    // If compiled with DEBUG_METRICS, enable by default unless explicitly disabled
+    debug_metrics_init(true, 1.0);
+#else
+    // Runtime flag only works if DEBUG_METRICS is defined at compile time
+    debug_metrics_init(config.debug_mode, 1.0);
+#endif
+
     // Initialize window
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Tree Growth Simulator");
     SetTargetFPS(0);  // Uncapped for benchmarking
@@ -248,6 +263,12 @@ int main(int argc, char *argv[])
 
         game_update(&state);
         render_frame(&state);
+
+        // Update debug metrics (emits once per second if enabled)
+#ifdef DEBUG_METRICS
+        svo_update_debug_metrics(&state.matter_svo);
+#endif
+        debug_metrics_update(GetTime());
     }
 
     // Write benchmark results

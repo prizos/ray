@@ -13,6 +13,46 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <math.h>
+#include <time.h>
+
+// ============ TIMING UTILITIES ============
+
+static inline double get_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+}
+
+// ============ TEST METRICS ============
+
+typedef struct {
+    uint64_t cells_processed;
+    uint64_t physics_steps;
+    uint64_t active_nodes;
+    uint64_t neighbor_lookups;
+    double elapsed_ms;
+} TestMetrics;
+
+static TestMetrics g_test_metrics = {0};
+
+static inline void test_metrics_reset(void) {
+    memset(&g_test_metrics, 0, sizeof(g_test_metrics));
+}
+
+static inline void test_metrics_print(void) {
+    if (g_test_metrics.physics_steps > 0 || g_test_metrics.cells_processed > 0) {
+        printf(" [%.1fms", g_test_metrics.elapsed_ms);
+        if (g_test_metrics.physics_steps > 0)
+            printf(", %llu steps", (unsigned long long)g_test_metrics.physics_steps);
+        if (g_test_metrics.active_nodes > 0)
+            printf(", %llu active", (unsigned long long)g_test_metrics.active_nodes);
+        if (g_test_metrics.cells_processed > 0)
+            printf(", %llu cells", (unsigned long long)g_test_metrics.cells_processed);
+        printf("]");
+    } else if (g_test_metrics.elapsed_ms > 0.1) {
+        printf(" [%.1fms]", g_test_metrics.elapsed_ms);
+    }
+}
 
 // ============ TEST RESULT TRACKING ============
 
@@ -21,17 +61,23 @@ typedef struct {
     int tests_passed;
     int tests_failed;
     const char *current_suite;
+    double test_start_time;
+    double suite_start_time;
+    double total_time_ms;
 } TestContext;
 
-static TestContext g_test_ctx = {0, 0, 0, NULL};
+static TestContext g_test_ctx = {0, 0, 0, NULL, 0, 0, 0};
 
 static inline void test_suite_begin(const char *name) {
     g_test_ctx.current_suite = name;
+    g_test_ctx.suite_start_time = get_time_ms();
     printf("\n=== %s ===\n\n", name);
 }
 
 static inline void test_suite_end(void) {
-    printf("\n");
+    double suite_elapsed = get_time_ms() - g_test_ctx.suite_start_time;
+    printf("\n  Suite time: %.1fms\n", suite_elapsed);
+    g_test_ctx.total_time_ms += suite_elapsed;
 }
 
 static inline void test_summary(void) {
@@ -43,6 +89,7 @@ static inline void test_summary(void) {
     } else {
         printf(" (ALL PASSED)\n");
     }
+    printf("Total time: %.1fms\n", g_test_ctx.total_time_ms);
     printf("========================================\n\n");
 }
 
@@ -53,14 +100,21 @@ static inline int test_exit_code(void) {
 // ============ ASSERTIONS ============
 
 #define TEST_BEGIN(name) \
-    printf("  %s... ", name); \
-    fflush(stdout);
+    do { \
+        test_metrics_reset(); \
+        g_test_ctx.test_start_time = get_time_ms(); \
+        printf("  %s... ", name); \
+        fflush(stdout); \
+    } while(0)
 
 #define TEST_PASS() \
     do { \
         g_test_ctx.tests_run++; \
         g_test_ctx.tests_passed++; \
-        printf("PASS\n"); \
+        g_test_metrics.elapsed_ms = get_time_ms() - g_test_ctx.test_start_time; \
+        printf("PASS"); \
+        test_metrics_print(); \
+        printf("\n"); \
         return true; \
     } while(0)
 
@@ -68,7 +122,10 @@ static inline int test_exit_code(void) {
     do { \
         g_test_ctx.tests_run++; \
         g_test_ctx.tests_failed++; \
-        printf("FAIL: " msg "\n", ##__VA_ARGS__); \
+        g_test_metrics.elapsed_ms = get_time_ms() - g_test_ctx.test_start_time; \
+        printf("FAIL: " msg, ##__VA_ARGS__); \
+        test_metrics_print(); \
+        printf("\n"); \
         return false; \
     } while(0)
 
@@ -83,53 +140,28 @@ static inline int test_exit_code(void) {
     ASSERT((a) == (b), msg " (got %d, expected %d)", (int)(a), (int)(b))
 
 #define ASSERT_FLOAT_EQ(a, b, eps, msg) \
-    ASSERT(fabsf((a) - (b)) <= (eps), msg " (got %.6f, expected %.6f)", (float)(a), (float)(b))
+    ASSERT(fabs((a) - (b)) <= (eps), msg " (got %.6f, expected %.6f)", (double)(a), (double)(b))
 
 #define ASSERT_TRUE(cond, msg) ASSERT(cond, msg)
 #define ASSERT_FALSE(cond, msg) ASSERT(!(cond), msg)
 
-// ============ FIXED-POINT MATH ============
-// Only define if not already defined by fixed.h
+// ============ METRICS RECORDING ============
 
-#ifndef FIXED_H  // fixed.h not included - define our own
+#define TEST_RECORD_PHYSICS_STEP() \
+    do { g_test_metrics.physics_steps++; } while(0)
 
-typedef int32_t fixed16_t;
+#define TEST_RECORD_ACTIVE_NODES(n) \
+    do { g_test_metrics.active_nodes += (n); } while(0)
 
-#define FIXED_SHIFT 16
-#define FIXED_ONE (1 << FIXED_SHIFT)
-#define FIXED_HALF (1 << (FIXED_SHIFT - 1))
-
-#define FLOAT_TO_FIXED(f) ((fixed16_t)((f) * FIXED_ONE))
-#define FIXED_TO_FLOAT(f) ((float)(f) / FIXED_ONE)
-
-static inline fixed16_t fixed_mul(fixed16_t a, fixed16_t b) {
-    int64_t result = (int64_t)a * b;
-    if (result >= 0) {
-        return (fixed16_t)((result + FIXED_HALF) >> FIXED_SHIFT);
-    } else {
-        return (fixed16_t)((result - FIXED_HALF) >> FIXED_SHIFT);
-    }
-}
-
-static inline fixed16_t fixed_div(fixed16_t a, fixed16_t b) {
-    int64_t result = ((int64_t)a << FIXED_SHIFT);
-    if ((result >= 0) == (b >= 0)) {
-        return (fixed16_t)((result + b/2) / b);
-    } else {
-        return (fixed16_t)((result - b/2) / b);
-    }
-}
-
-#endif // FIXED_H
+#define TEST_RECORD_CELLS(n) \
+    do { g_test_metrics.cells_processed += (n); } while(0)
 
 // ============ CONSTANTS ============
 
-// For tests, we use INITIAL_TEMP_K from svo.h for initializing matter
-// TEST_AMBIENT_TEMP_K is kept for backward compatibility with old tests
-#define TEST_AMBIENT_TEMP_K 293.15f
-#define TEST_AMBIENT_TEMP FLOAT_TO_FIXED(293.15f)
-#define TEST_FIRE_TEMP FLOAT_TO_FIXED(400.0f)
-#define TEST_COLD_TEMP FLOAT_TO_FIXED(243.15f)  // 50K below ambient (-30°C)
-#define TEST_IGNITION_TEMP FLOAT_TO_FIXED(533.0f)
+// Standard test temperatures (Kelvin)
+#define TEST_AMBIENT_TEMP_K 293.15   // 20°C
+#define TEST_FIRE_TEMP_K 400.0       // ~127°C
+#define TEST_COLD_TEMP_K 243.15      // -30°C
+#define TEST_IGNITION_TEMP_K 533.0   // ~260°C
 
 #endif // TEST_COMMON_H

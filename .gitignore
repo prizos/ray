@@ -1,8 +1,14 @@
 # Build
 build/
+build-*/
+subprojects/
 *.o
 *.a
 game
+terrain_tune
+
+# Archive (old code)
+archive/
 
 # OS
 .DS_Store

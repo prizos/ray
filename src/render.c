@@ -1,5 +1,5 @@
 #include "render.h"
-#include "svo.h"
+#include "chunk.h"
 #include "raymath.h"
 #include <stdlib.h>
 #include <string.h>
@@ -455,11 +455,12 @@ void render_frame(const GameState *state)
         for (int cx = sample_start_x; cx < sample_end_x; cx++) {
             for (int cz = sample_start_z; cz < sample_end_z; cz++) {
                 for (int cy = y_min; cy < y_max; cy++) {
-                    const Cell3D *cell = svo_get_cell((MatterSVO*)&state->matter_svo, cx, cy, cz);
-                    if (!cell || cell->material_count == 0) continue;
+                    // Use non-const access for temperature caching during render
+                    Cell3D *cell = svo_get_cell_for_write((MatterSVO*)&state->matter_svo, cx, cy, cz);
+                    if (!cell || cell->present == 0) continue;
 
                     // Check for water
-                    const MaterialEntry *water = cell3d_find_material_const(cell, MAT_WATER);
+                    MaterialEntry *water = cell3d_find_material(cell, MAT_WATER);
                     if (water && water->state.moles > 0.1) {
                         // Convert cell coords to world coords
                         float wx, wy, wz;
@@ -483,7 +484,7 @@ void render_frame(const GameState *state)
                     }
 
                     // Check for lava (hot rock)
-                    const MaterialEntry *rock = cell3d_find_material_const(cell, MAT_ROCK);
+                    MaterialEntry *rock = cell3d_find_material(cell, MAT_ROCK);
                     if (rock && rock->state.moles > 0.1) {
                         // Use energy-based phase for accurate rendering
                         Phase phase = material_get_phase_from_energy(&rock->state, MAT_ROCK);

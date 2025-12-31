@@ -5,7 +5,7 @@
 #include "tree.h"
 #include "terrain.h"
 #include "beaver.h"
-#include "svo.h"
+#include "chunk.h"
 #include <stdint.h>
 
 // ============ DISPLAY CONSTANTS ============
