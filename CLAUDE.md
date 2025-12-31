@@ -1,42 +1,20 @@
-# Ray - Distributed Game Client
+# Ray - Physics-Based Game
 
-A raylib-based game client written in pure C. The client handles rendering and input, connecting to a distributed Go backend (separate repository) for physics and game state.
+A raylib-based game written in pure C with accurate physics simulation of matter and energy.
 
 ## Table of Contents
 
 1. [Build System](#build-system)
-   - [Prerequisites](#prerequisites)
-   - [Build Commands](#build-commands)
-   - [Debug Build](#debug-build)
 2. [Testing](#testing)
-   - [Running Tests](#running-tests)
-   - [Test Index](#test-index)
-   - [Testing Rules](#testing-rules)
 3. [Architecture](#architecture)
-   - [Project Structure](#project-structure)
-   - [Matter System](#matter-system-chunks)
 4. [Code Conventions](#code-conventions)
-5. [Physics Reference](#physics-reference)
-   - [Thermodynamic Model](#thermodynamic-model)
-   - [Reference Values](#reference-values)
+5. [Physics Documentation](#physics-documentation)
 
 ---
 
 ## Build System
 
 Uses [Meson](https://mesonbuild.com/) build system. **All builds must use these commands.**
-
-### Prerequisites
-
-On Ubuntu/Debian:
-```bash
-sudo apt install libraylib-dev meson ninja-build
-```
-
-On macOS:
-```bash
-brew install raylib meson ninja
-```
 
 ### Build Commands
 
@@ -145,7 +123,7 @@ src/           # C source files
 include/       # Header files
 tests/         # Test files (all tests here)
 build/         # Build output (gitignored)
-docs/          # Documentation
+docs/          # Documentation (physics, materials, raylib)
 ```
 
 ### Matter System (Chunks)
@@ -163,7 +141,7 @@ Key types:
 - `ChunkWorld` - Hash table of chunks containing all matter
 - `Chunk` - 32x32x32 cell block with O(1) neighbor access
 - `Cell3D` - A cell containing multiple materials (bitmask-based)
-- `MaterialType` - Enum: `MAT_WATER`, `MAT_ROCK`, etc.
+- `MaterialType` - Enum: `MAT_WATER`, `MAT_ROCK`, `MAT_DIRT`, etc.
 - `MaterialProperties` - Physical constants (in `MATERIAL_PROPS` table)
 - `MaterialState` - Per-material: `moles` + `thermal_energy`
 
@@ -179,79 +157,55 @@ Key types:
 
 ---
 
-## Physics Reference
+## Physics Documentation
 
-### Test Philosophy
+Detailed physics and material references are in `docs/`:
 
-Tests must be **scientifically rigorous**:
+| Document | Contents |
+|----------|----------|
+| [docs/physics.md](docs/physics.md) | Thermodynamic model, heat transfer, phase transitions, Fourier's Law |
+| [docs/materials.md](docs/materials.md) | Material properties index (H2O, SiO2, N2, O2, CO2) with verified values |
 
-1. **Theory First**: Every test traces to a physical law
-   - Conservation of mass/energy
-   - Fourier's Law of heat conduction
-   - Phase transition thermodynamics
+### Quick Reference
 
-2. **Derived, Not Assumed**: Properties derived from fundamentals
-   - Temperature derived from thermal energy: `T = f(E)`
-   - Phase derived from energy thresholds, not temperature alone
-   - No "ambient temperature" fallback - vacuum has no temperature
-
-3. **Hermetic System**: Energy/mass only enter through explicit tools
-   - No spontaneous energy generation
-   - Empty cells return 0.0 for temperature (sentinel value)
-
-### Thermodynamic Model
+**Core principle**: Temperature is derived from thermal energy, not stored directly.
 
 ```
-Energy Thresholds (for n moles):
-  E_melt_start = n * Cp_s * Tm
-  E_melt_end   = E_melt_start + n * Hf
-  E_boil_start = E_melt_end + n * Cp_l * (Tb - Tm)
-  E_boil_end   = E_boil_start + n * Hv
-
-Temperature from Energy:
-  Solid:           T = E / (n * Cp_s)                      [E < E_melt_start]
-  Melting plateau: T = Tm                                  [E_melt_start <= E < E_melt_end]
-  Liquid:          T = Tm + (E - E_melt_end) / (n * Cp_l)  [E_melt_end <= E < E_boil_start]
-  Boiling plateau: T = Tb                                  [E_boil_start <= E < E_boil_end]
-  Gas:             T = Tb + (E - E_boil_end) / (n * Cp_g)  [E >= E_boil_end]
+T = f(E, n, material_properties)
 ```
 
-### Reference Values
+Where energy accounts for latent heat at phase transitions.
 
-| Substance | Cp_s | Cp_l | Cp_g | Tm (K) | Tb (K) | Hf (J/mol) | Hv (J/mol) |
-|-----------|------|------|------|--------|--------|------------|------------|
-| H2O       | 38.0 | 75.3 | 33.6 | 273.15 | 373.15 | 6,010      | 40,660     |
-| SiO2      | 44.4 | 82.6 | 47.4 | 1,986  | 2,503  | 9,600      | 600,000    |
-| N2        | 29.1 | 29.1 | 29.1 | 63.15  | 77.36  | 720        | 5,560      |
-| O2        | 29.4 | 29.4 | 29.4 | 54.36  | 90.19  | 444        | 6,820      |
+**Test philosophy**: Every test must trace to a physical law (conservation of energy, Fourier's Law, etc.). Properties are derived from fundamentals, never hardcoded.
+
+**Constants**:
+- `INITIAL_TEMP_K = 293.0` (20C) - Only for initializing new matter
+- Empty cells return 0.0 for temperature (sentinel value)
 
 ### Energy Calculation Helper
 
-Test files should use this helper:
+Test files should use this pattern:
 
 ```c
 static double calculate_material_energy(MaterialType type, double moles, double temp_k) {
     const MaterialProperties *props = &MATERIAL_PROPS[type];
-    double Cp_s = props->molar_heat_capacity_solid;
-    double Cp_l = props->molar_heat_capacity_liquid;
-    double Cp_g = props->molar_heat_capacity_gas;
     double Tm = props->melting_point;
     double Tb = props->boiling_point;
-    double Hf = props->enthalpy_fusion;
-    double Hv = props->enthalpy_vaporization;
 
     if (temp_k <= Tm) {
-        return moles * Cp_s * temp_k;
+        return moles * props->molar_heat_capacity_solid * temp_k;
     } else if (temp_k <= Tb) {
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (temp_k - Tm);
+        return moles * props->molar_heat_capacity_solid * Tm
+             + moles * props->enthalpy_fusion
+             + moles * props->molar_heat_capacity_liquid * (temp_k - Tm);
     } else {
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (Tb - Tm)
-             + moles * Hv + moles * Cp_g * (temp_k - Tb);
+        return moles * props->molar_heat_capacity_solid * Tm
+             + moles * props->enthalpy_fusion
+             + moles * props->molar_heat_capacity_liquid * (Tb - Tm)
+             + moles * props->enthalpy_vaporization
+             + moles * props->molar_heat_capacity_gas * (temp_k - Tb);
     }
 }
 ```
 
-### Constants
-
-- `INITIAL_TEMP_K = 293.0` (20C) - Only for initializing new matter from tools
-- Vacuum (empty cells) return 0.0 for temperature queries
+See [docs/physics.md](docs/physics.md) for full derivation and formulas.
