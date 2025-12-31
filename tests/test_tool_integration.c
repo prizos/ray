@@ -3,9 +3,7 @@
 // including physics effects like heat propagation and water flow
 
 #include "test_common.h"
-#include "chunk.h"
 #include "terrain.h"
-#include <math.h>
 #include <string.h>
 
 // ============================================================================
@@ -21,30 +19,6 @@ typedef struct {
 // ============================================================================
 //                         TEST HELPERS
 // ============================================================================
-
-// Generic energy calculation for any material at a given temperature (accounts for latent heat)
-// Uses phase-specific heat capacities
-static double calculate_material_energy(MaterialType type, double moles, double temp_k) {
-    const MaterialProperties *props = &MATERIAL_PROPS[type];
-    double Cp_s = props->molar_heat_capacity_solid;
-    double Cp_l = props->molar_heat_capacity_liquid;
-    double Cp_g = props->molar_heat_capacity_gas;
-    double Tm = props->melting_point;
-    double Tb = props->boiling_point;
-    double Hf = props->enthalpy_fusion;
-    double Hv = props->enthalpy_vaporization;
-
-    if (temp_k <= Tm) {
-        // Solid
-        return moles * Cp_s * temp_k;
-    } else if (temp_k <= Tb) {
-        // Liquid: includes latent heat of fusion
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (temp_k - Tm);
-    } else {
-        // Gas: includes both latent heats
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (Tb - Tm) + moles * Hv + moles * Cp_g * (temp_k - Tb);
-    }
-}
 
 // Calculate energy for water at a given temperature (accounts for latent heat)
 static double calculate_water_energy(double moles, double temp_k) {
