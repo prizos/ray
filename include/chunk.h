@@ -315,6 +315,24 @@ void world_update_chunk_neighbors(ChunkWorld *world, Chunk *chunk);
 
 // ============ PHYSICS ============
 
+// Physics system flags (bitmask)
+typedef enum {
+    PHYSICS_NONE          = 0,
+    PHYSICS_HEAT_INTERNAL = 1 << 0,  // Internal equilibration within cells
+    PHYSICS_HEAT_CONDUCT  = 1 << 1,  // Heat conduction between cells
+    PHYSICS_LIQUID_FLOW   = 1 << 2,  // Liquid flow (gravity-driven)
+    PHYSICS_GAS_DIFFUSE   = 1 << 3,  // Gas diffusion
+
+    // Common combinations
+    PHYSICS_HEAT_ALL      = PHYSICS_HEAT_INTERNAL | PHYSICS_HEAT_CONDUCT,
+    PHYSICS_MATTER_ALL    = PHYSICS_LIQUID_FLOW | PHYSICS_GAS_DIFFUSE,
+    PHYSICS_ALL           = PHYSICS_HEAT_ALL | PHYSICS_MATTER_ALL
+} PhysicsFlags;
+
+// Run physics with specific systems enabled
+void world_physics_step_flags(ChunkWorld *world, float dt, PhysicsFlags flags);
+
+// Run all physics systems (convenience wrapper for game loop)
 void world_physics_step(ChunkWorld *world, float dt);
 
 // ============ TOOL APIs ============

@@ -536,8 +536,7 @@ static bool test_energy_conserved_during_conduction(void) {
 
     // Create two adjacent cells with different temperatures
     // Use only water (clear air) to avoid heat leaking to air
-    double water_hc_solid = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_solid;
-
+    // Use liquid water temperatures (273K-373K) to avoid phase transitions during test
     Cell3D *cell1 = svo_get_cell_for_write(&svo, cx, cy, cz);
     Cell3D *cell2 = svo_get_cell_for_write(&svo, cx + 1, cy, cz);
 
@@ -547,8 +546,9 @@ static bool test_energy_conserved_during_conduction(void) {
     cell3d_free(cell2);
     cell3d_init(cell2);
 
-    cell3d_add_material(cell1, MAT_WATER, 1.0, calculate_water_energy(1.0, 400.0));  // Hot (400K gas)
-    cell3d_add_material(cell2, MAT_WATER, 1.0, water_hc_solid * 200.0);  // Cold (200K solid ice)
+    // Use liquid temperatures: 350K (hot) and 280K (cold) - both in liquid range
+    cell3d_add_material(cell1, MAT_WATER, 1.0, calculate_water_energy(1.0, 350.0));  // Hot liquid
+    cell3d_add_material(cell2, MAT_WATER, 1.0, calculate_water_energy(1.0, 280.0));  // Cold liquid
 
     svo_mark_cell_active(&svo, cx, cy, cz);
     svo_mark_cell_active(&svo, cx + 1, cy, cz);

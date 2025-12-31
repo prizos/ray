@@ -473,6 +473,155 @@ static bool test_liquid_flows_down(void) {
     TEST_PASS();
 }
 
+static bool test_water_flows_into_air_occupied_cell(void) {
+    TEST_BEGIN("water flows into cell occupied by air (not vacuum)");
+
+    MatterSVO svo;
+    if (!init_test_svo(&svo)) { TEST_FAIL("init failed"); }
+
+    // Set up: water cell above, air cell below
+    int cx, cy, cz;
+    svo_world_to_cell(0.0f, 10.0f, 0.0f, &cx, &cy, &cz);
+
+    // Add water at upper cell
+    Cell3D *water_cell = svo_get_cell_for_write(&svo, cx, cy, cz);
+    if (!water_cell) { TEST_FAIL("couldn't get water cell"); }
+    double water_moles = 5.0;
+    double water_energy = calculate_material_energy(MAT_WATER, water_moles, INITIAL_TEMP_K);
+    cell3d_add_material(water_cell, MAT_WATER, water_moles, water_energy);
+    svo_mark_cell_active(&svo, cx, cy, cz);
+
+    // Add air at lower cell (not vacuum - has material)
+    Cell3D *air_cell = svo_get_cell_for_write(&svo, cx, cy - 1, cz);
+    if (!air_cell) { TEST_FAIL("couldn't get air cell"); }
+    double air_moles = 1.0;
+    double air_energy = calculate_material_energy(MAT_AIR, air_moles, INITIAL_TEMP_K);
+    cell3d_add_material(air_cell, MAT_AIR, air_moles, air_energy);
+    svo_mark_cell_active(&svo, cx, cy - 1, cz);
+
+    // Verify initial state
+    double water_before = water_cell->materials[MAT_WATER].moles;
+    ASSERT_FLOAT_EQ(water_before, 5.0, 0.01, "should start with 5 moles water");
+
+    // Run physics (liquid flow only)
+    for (int i = 0; i < 50; i++) {
+        world_physics_step_flags(&svo, 0.016f, PHYSICS_LIQUID_FLOW);
+    }
+
+    // Check: water should have flowed into the air cell
+    const Cell3D *lower_after = svo_get_cell(&svo, cx, cy - 1, cz);
+    ASSERT(lower_after != NULL, "lower cell should exist");
+    ASSERT(CELL_HAS_MATERIAL(lower_after, MAT_WATER), "water should have flowed into air cell");
+
+    double water_in_lower = lower_after->materials[MAT_WATER].moles;
+    ASSERT_GT(water_in_lower, 0.0, "lower cell should have water");
+
+    svo_cleanup(&svo);
+    TEST_PASS();
+}
+
+static bool test_heat_does_not_flow_into_vacuum(void) {
+    TEST_BEGIN("heat does NOT flow into vacuum (conduction requires matter)");
+
+    MatterSVO svo;
+    if (!init_test_svo(&svo)) { TEST_FAIL("init failed"); }
+
+    // Set up: hot water cell, vacuum cell adjacent
+    int cx, cy, cz;
+    svo_world_to_cell(0.0f, 0.0f, 0.0f, &cx, &cy, &cz);
+
+    // Add hot water
+    Cell3D *hot_cell = svo_get_cell_for_write(&svo, cx, cy, cz);
+    if (!hot_cell) { TEST_FAIL("couldn't get hot cell"); }
+    double water_moles = 5.0;
+    double hot_temp = 400.0;  // Hot water (steam)
+    double water_energy = calculate_material_energy(MAT_WATER, water_moles, hot_temp);
+    cell3d_add_material(hot_cell, MAT_WATER, water_moles, water_energy);
+    svo_mark_cell_active(&svo, cx, cy, cz);
+
+    // Neighbor cell is vacuum (empty) - don't add anything
+    // Just verify it's empty
+    const Cell3D *vacuum_cell = svo_get_cell(&svo, cx + 1, cy, cz);
+    bool neighbor_is_vacuum = (vacuum_cell == NULL || vacuum_cell->present == 0);
+    ASSERT(neighbor_is_vacuum, "neighbor should be vacuum");
+
+    // Record energy before
+    double energy_before = hot_cell->materials[MAT_WATER].thermal_energy;
+
+    // Run heat conduction only
+    for (int i = 0; i < 100; i++) {
+        world_physics_step_flags(&svo, 0.016f, PHYSICS_HEAT_CONDUCT);
+    }
+
+    // Get cell again (pointer may have changed)
+    hot_cell = svo_get_cell_for_write(&svo, cx, cy, cz);
+    double energy_after = hot_cell->materials[MAT_WATER].thermal_energy;
+
+    // Energy should NOT have changed (no conduction to vacuum)
+    // Allow tiny tolerance for floating point
+    ASSERT_FLOAT_EQ(energy_after, energy_before, 0.1, "energy should not leak to vacuum");
+
+    svo_cleanup(&svo);
+    TEST_PASS();
+}
+
+static bool test_heat_flows_between_matter_cells(void) {
+    TEST_BEGIN("heat DOES flow between adjacent matter cells");
+
+    MatterSVO svo;
+    if (!init_test_svo(&svo)) { TEST_FAIL("init failed"); }
+
+    // Set up: hot cell and cold cell adjacent
+    int cx, cy, cz;
+    svo_world_to_cell(0.0f, 0.0f, 0.0f, &cx, &cy, &cz);
+
+    // Add hot water at (cx, cy, cz)
+    Cell3D *hot_cell = svo_get_cell_for_write(&svo, cx, cy, cz);
+    if (!hot_cell) { TEST_FAIL("couldn't get hot cell"); }
+    double water_moles = 5.0;
+    double hot_temp = 400.0;
+    double hot_energy = calculate_material_energy(MAT_WATER, water_moles, hot_temp);
+    cell3d_add_material(hot_cell, MAT_WATER, water_moles, hot_energy);
+    svo_mark_cell_active(&svo, cx, cy, cz);
+
+    // Add cold water at (cx+1, cy, cz)
+    Cell3D *cold_cell = svo_get_cell_for_write(&svo, cx + 1, cy, cz);
+    if (!cold_cell) { TEST_FAIL("couldn't get cold cell"); }
+    double cold_temp = 280.0;  // Just above freezing (liquid)
+    double cold_energy = calculate_material_energy(MAT_WATER, water_moles, cold_temp);
+    cell3d_add_material(cold_cell, MAT_WATER, water_moles, cold_energy);
+    svo_mark_cell_active(&svo, cx + 1, cy, cz);
+
+    // Record temperatures before
+    double temp_hot_before = cell_get_temperature(hot_cell);
+    double temp_cold_before = cell_get_temperature(cold_cell);
+    ASSERT_GT(temp_hot_before, temp_cold_before, "hot should be hotter than cold");
+
+    // Run heat conduction only
+    for (int i = 0; i < 100; i++) {
+        world_physics_step_flags(&svo, 0.016f, PHYSICS_HEAT_CONDUCT);
+    }
+
+    // Get cells again
+    hot_cell = svo_get_cell_for_write(&svo, cx, cy, cz);
+    cold_cell = svo_get_cell_for_write(&svo, cx + 1, cy, cz);
+
+    double temp_hot_after = cell_get_temperature(hot_cell);
+    double temp_cold_after = cell_get_temperature(cold_cell);
+
+    // Heat should have flowed: hot cooled, cold warmed
+    ASSERT_LT(temp_hot_after, temp_hot_before, "hot cell should cool down");
+    ASSERT_GT(temp_cold_after, temp_cold_before, "cold cell should warm up");
+
+    // Temperature difference should have decreased
+    double diff_before = temp_hot_before - temp_cold_before;
+    double diff_after = temp_hot_after - temp_cold_after;
+    ASSERT_LT(diff_after, diff_before, "temperature difference should decrease");
+
+    svo_cleanup(&svo);
+    TEST_PASS();
+}
+
 // ============================================================================
 //                      TIER 4: PHASE TRANSITION TESTS
 // ============================================================================
@@ -540,6 +689,11 @@ int main(void) {
 
         // Tier 3: Flow Tests
         {"FLOW", "liquid_flows_down", test_liquid_flows_down},
+        {"FLOW", "water_flows_into_air", test_water_flows_into_air_occupied_cell},
+
+        // Tier 3b: Heat Conduction Tests
+        {"HEAT", "no_conduction_to_vacuum", test_heat_does_not_flow_into_vacuum},
+        {"HEAT", "conduction_between_matter", test_heat_flows_between_matter_cells},
 
         // Tier 4: Phase Tests
         {"PHASE", "water_phase_by_temperature", test_water_phase_determined_by_temperature},

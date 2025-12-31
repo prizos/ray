@@ -13,6 +13,7 @@
  */
 
 #include "test_common.h"
+#include "terrain.h"
 #include <string.h>
 
 // Test runner macro
@@ -452,6 +453,101 @@ static bool test_svo_add_heat(void) {
     TEST_PASS();
 }
 
+static bool test_heat_on_empty_cell(void) {
+    TEST_BEGIN("world_add_heat_at on empty cell does not crash");
+
+    ChunkWorld world;
+    world_init(&world);
+
+    // Try to add heat to empty cell (no materials) - should not crash
+    world_add_heat_at(&world, 50.0f, 10.0f, 50.0f, 1000.0);
+
+    // Cell should still be empty
+    int cx, cy, cz;
+    world_to_cell(50.0f, 10.0f, 50.0f, &cx, &cy, &cz);
+    const Cell3D *cell = world_get_cell(&world, cx, cy, cz);
+    // Cell might be NULL (no chunk) or empty (present == 0)
+    ASSERT(cell == NULL || cell->present == 0, "empty cell should remain empty");
+
+    world_cleanup(&world);
+    TEST_PASS();
+}
+
+static bool test_water_at_positive_y(void) {
+    TEST_BEGIN("water at positive Y is at correct cell coordinate");
+
+    ChunkWorld world;
+    world_init(&world);
+
+    // Add water at world position (0, 10, 0) - 10 world units above ground
+    world_add_water_at(&world, 0.0f, 10.0f, 0.0f, 5.0);
+
+    // Verify cell coordinates
+    int cx, cy, cz;
+    world_to_cell(0.0f, 10.0f, 0.0f, &cx, &cy, &cz);
+
+    // Expected: cx = SVO_SIZE/2 = 128, cy = SVO_GROUND_Y + 10/2.5 = 128+4 = 132
+    ASSERT(cx == SVO_SIZE / 2, "x at world 0 should be center");
+    ASSERT(cy == SVO_GROUND_Y + 4, "y at world 10 should be ground + 4 cells");
+
+    // Verify water exists at that cell
+    const Cell3D *cell = world_get_cell(&world, cx, cy, cz);
+    ASSERT(cell != NULL, "cell should exist");
+    ASSERT(CELL_HAS_MATERIAL(cell, MAT_WATER), "cell should have water");
+    ASSERT_FLOAT_EQ(cell->materials[MAT_WATER].moles, 5.0, 0.01, "should have 5 moles");
+
+    world_cleanup(&world);
+    TEST_PASS();
+}
+
+static bool test_empty_cell_temperature_is_zero(void) {
+    TEST_BEGIN("empty cell temperature is 0.0 (vacuum sentinel)");
+
+    ChunkWorld world;
+    world_init(&world);
+
+    // Get info for empty cell - should have temperature 0.0
+    CellInfo info = world_get_cell_info(&world, 0.0f, 0.0f, 0.0f);
+
+    // Cell is valid but empty
+    ASSERT(info.valid, "cell should be valid (chunk created on access)");
+    ASSERT(info.material_count == 0, "cell should have no materials");
+    ASSERT_FLOAT_EQ(info.temperature, 0.0, 0.01, "empty cell temp should be 0.0");
+
+    world_cleanup(&world);
+    TEST_PASS();
+}
+
+static bool test_terrain_init_places_materials(void) {
+    TEST_BEGIN("terrain init places dirt and rock at surface");
+
+    // Create terrain with flat height
+    int terrain[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION];
+    for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
+        for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
+            terrain[z][x] = 5;  // Flat terrain at height 5
+        }
+    }
+
+    ChunkWorld world;
+    world_init_terrain(&world, terrain);
+
+    // Check cell at terrain surface (center of terrain grid)
+    float world_x = 80 * TERRAIN_SCALE;  // Middle of terrain
+    float world_z = 80 * TERRAIN_SCALE;
+    float world_y = 5 * TERRAIN_SCALE;   // Surface height
+
+    CellInfo info = world_get_cell_info(&world, world_x, world_y, world_z);
+    ASSERT(info.valid, "terrain cell should be valid");
+    ASSERT(info.material_count >= 1, "terrain should have material");
+    ASSERT(info.primary_material == MAT_DIRT || info.primary_material == MAT_ROCK,
+           "terrain should be dirt or rock");
+    ASSERT(info.temperature > 200, "terrain should be at ambient temperature");
+
+    world_cleanup(&world);
+    TEST_PASS();
+}
+
 // ============ MAIN ============
 
 int main(void) {
@@ -490,6 +586,10 @@ int main(void) {
     // Tool functions
     RUN_TEST(test_svo_add_water);
     RUN_TEST(test_svo_add_heat);
+    RUN_TEST(test_heat_on_empty_cell);
+    RUN_TEST(test_water_at_positive_y);
+    RUN_TEST(test_empty_cell_temperature_is_zero);
+    RUN_TEST(test_terrain_init_places_materials);
 
     printf("\n=== Results ===\n");
     printf("Passed: %d\n", passed);

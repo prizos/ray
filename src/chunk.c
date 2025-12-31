@@ -393,7 +393,8 @@ void chunk_mark_dirty(Chunk *chunk, int lx, int ly, int lz) {
 }
 
 void chunk_reset_dirty(Chunk *chunk) {
-    chunk->is_active = false;
+    // Note: is_active is managed by world_add_to_active_list, not here.
+    // We only reset the dirty region bounds.
     chunk->dirty_min_x = CHUNK_SIZE;
     chunk->dirty_min_y = CHUNK_SIZE;
     chunk->dirty_min_z = CHUNK_SIZE;

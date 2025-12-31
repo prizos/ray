@@ -160,6 +160,11 @@ static void world_add_to_active_list(ChunkWorld *world, Chunk *chunk) {
         world->active_capacity = new_capacity;
     }
 
+    // Mark chunk as active and reset stability
+    chunk->is_active = true;
+    chunk->is_stable = false;
+    chunk->stable_frames = 0;
+
     chunk->active_list_idx = world->active_count;
     world->active_chunks[world->active_count++] = chunk;
 }

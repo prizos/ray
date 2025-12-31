@@ -292,8 +292,12 @@ static void process_cell_gas_diffusion(ChunkWorld *world, Chunk *chunk,
 
 // ============ CHUNK PHYSICS STEP ============
 
-static void chunk_physics_step(ChunkWorld *world, Chunk *chunk, double dt) {
-    if (!chunk->is_active || chunk->is_stable) return;
+static void chunk_physics_step_flags(ChunkWorld *world, Chunk *chunk, double dt, PhysicsFlags flags) {
+    // Note: is_active tracks whether material moved THIS frame (set during processing).
+    // We don't check it here - being in snapshot means we should process.
+    // is_stable is set after many frames with no activity.
+    if (chunk->is_stable) return;
+    if (flags == PHYSICS_NONE) return;
 
     // Expand dirty region by 1 for neighbor interactions
     int x0 = (chunk->dirty_min_x > 0) ? chunk->dirty_min_x - 1 : 0;
@@ -303,35 +307,45 @@ static void chunk_physics_step(ChunkWorld *world, Chunk *chunk, double dt) {
     int z0 = (chunk->dirty_min_z > 0) ? chunk->dirty_min_z - 1 : 0;
     int z1 = (chunk->dirty_max_z < CHUNK_SIZE - 1) ? chunk->dirty_max_z + 1 : CHUNK_SIZE - 1;
 
-    // Process cells in dirty region only
-    for (int z = z0; z <= z1; z++) {
-        for (int y = y0; y <= y1; y++) {
-            for (int x = x0; x <= x1; x++) {
-                Cell3D *cell = chunk_get_cell(chunk, x, y, z);
+    // First pass: heat systems
+    if (flags & PHYSICS_HEAT_ALL) {
+        for (int z = z0; z <= z1; z++) {
+            for (int y = y0; y <= y1; y++) {
+                for (int x = x0; x <= x1; x++) {
+                    Cell3D *cell = chunk_get_cell(chunk, x, y, z);
 
-                // Internal equilibration
-                cell_internal_equilibration(cell, dt);
+                    // Internal equilibration
+                    if (flags & PHYSICS_HEAT_INTERNAL) {
+                        cell_internal_equilibration(cell, dt);
+                    }
 
-                // Heat conduction
-                process_cell_heat_conduction(world, chunk, x, y, z, dt);
+                    // Heat conduction
+                    if (flags & PHYSICS_HEAT_CONDUCT) {
+                        process_cell_heat_conduction(world, chunk, x, y, z, dt);
+                    }
+                }
             }
         }
     }
 
     // Second pass: liquid flow
-    for (int z = z0; z <= z1; z++) {
-        for (int y = y0; y <= y1; y++) {
-            for (int x = x0; x <= x1; x++) {
-                process_cell_liquid_flow(world, chunk, x, y, z, dt);
+    if (flags & PHYSICS_LIQUID_FLOW) {
+        for (int z = z0; z <= z1; z++) {
+            for (int y = y0; y <= y1; y++) {
+                for (int x = x0; x <= x1; x++) {
+                    process_cell_liquid_flow(world, chunk, x, y, z, dt);
+                }
             }
         }
     }
 
     // Third pass: gas diffusion
-    for (int z = z0; z <= z1; z++) {
-        for (int y = y0; y <= y1; y++) {
-            for (int x = x0; x <= x1; x++) {
-                process_cell_gas_diffusion(world, chunk, x, y, z, dt);
+    if (flags & PHYSICS_GAS_DIFFUSE) {
+        for (int z = z0; z <= z1; z++) {
+            for (int y = y0; y <= y1; y++) {
+                for (int x = x0; x <= x1; x++) {
+                    process_cell_gas_diffusion(world, chunk, x, y, z, dt);
+                }
             }
         }
     }
@@ -339,7 +353,9 @@ static void chunk_physics_step(ChunkWorld *world, Chunk *chunk, double dt) {
 
 // ============ WORLD PHYSICS STEP ============
 
-void world_physics_step(ChunkWorld *world, float dt) {
+void world_physics_step_flags(ChunkWorld *world, float dt, PhysicsFlags flags) {
+    if (flags == PHYSICS_NONE) return;
+
     world->accumulator += dt;
 
     while (world->accumulator >= PHYSICS_DT) {
@@ -354,31 +370,44 @@ void world_physics_step(ChunkWorld *world, float dt) {
         if (!snapshot) continue;
         memcpy(snapshot, world->active_chunks, sizeof(Chunk*) * snapshot_count);
 
-        // Reset active list for re-marking
+        // Reset active list and is_active flag for re-marking
+        // is_active will be set true again by world_mark_cell_active if material moves
         for (int i = 0; i < snapshot_count; i++) {
             if (snapshot[i]) {
                 snapshot[i]->active_list_idx = -1;
+                snapshot[i]->is_active = false;
             }
         }
         world->active_count = 0;
 
-        // Process each chunk
+        // Process each chunk with specified flags
         for (int i = 0; i < snapshot_count; i++) {
             Chunk *chunk = snapshot[i];
             if (!chunk) continue;
 
-            chunk_physics_step(world, chunk, PHYSICS_DT);
+            chunk_physics_step_flags(world, chunk, PHYSICS_DT, flags);
         }
 
-        // Reset dirty regions and check equilibrium
+        // Check equilibrium and reset dirty regions only for inactive chunks
         for (int i = 0; i < snapshot_count; i++) {
             Chunk *chunk = snapshot[i];
             if (!chunk) continue;
 
             chunk_check_equilibrium(chunk);
-            chunk_reset_dirty(chunk);
+
+            // Only reset dirty region if nothing changed this frame.
+            // If is_active is true (material moved), keep the dirty region
+            // so the affected cells are processed next frame.
+            if (!chunk->is_active) {
+                chunk_reset_dirty(chunk);
+            }
         }
 
         free(snapshot);
     }
+}
+
+// Convenience wrapper - runs all physics systems
+void world_physics_step(ChunkWorld *world, float dt) {
+    world_physics_step_flags(world, dt, PHYSICS_ALL);
 }

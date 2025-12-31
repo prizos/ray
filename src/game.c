@@ -52,12 +52,22 @@ static void game_init_common(GameState *state, uint32_t seed)
     // Initialize 3D SVO matter simulation
     svo_init(&state->matter_svo, state->terrain_height);
 
-    // Add some initial test water in the center of the map
+    // Add some initial test water in the center of the map (at terrain surface level)
     for (int z = 75; z < 85; z++) {
         for (int x = 75; x < 85; x++) {
+            // Get terrain height at this location
+            // Convert to terrain grid coords (terrain is at tx * TERRAIN_SCALE)
+            int terrain_x = (int)(x * SVO_CELL_SIZE / TERRAIN_SCALE);
+            int terrain_z = (int)(z * SVO_CELL_SIZE / TERRAIN_SCALE);
+            if (terrain_x >= TERRAIN_RESOLUTION) terrain_x = TERRAIN_RESOLUTION - 1;
+            if (terrain_z >= TERRAIN_RESOLUTION) terrain_z = TERRAIN_RESOLUTION - 1;
+            int terrain_height = state->terrain_height[terrain_x][terrain_z];
+
+            // Place water at terrain surface + 1 cell up
             float world_x = x * SVO_CELL_SIZE + SVO_CELL_SIZE / 2.0f;
+            float world_y = terrain_height * TERRAIN_SCALE + TERRAIN_SCALE;  // One cell above terrain
             float world_z = z * SVO_CELL_SIZE + SVO_CELL_SIZE / 2.0f;
-            svo_add_water_at(&state->matter_svo, world_x, 0.0f, world_z, 2.0);  // At ground level
+            svo_add_water_at(&state->matter_svo, world_x, world_y, world_z, 2.0);
         }
     }
 

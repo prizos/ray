@@ -111,6 +111,7 @@ full_tests = {
   'test_energy_conservation': files('tests/test_energy_conservation.c'),
   'test_tool_integration': files('tests/test_tool_integration.c'),
   'test_e2e_simulation': files('tests/test_e2e_simulation.c'),
+  'test_physics_predictions': files('tests/test_physics_predictions.c'),
 }
 
 foreach name, sources : full_tests
