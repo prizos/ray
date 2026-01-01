@@ -576,10 +576,10 @@ static bool test_debug_water_flow(void) {
     cell_add_material(top, MAT_WATER, total_water, water_energy);
     world_mark_cell_active(&world, base_x, top_y, base_z);
 
-    // Verify phase is liquid
-    Phase phase = material_get_phase_from_energy(&top->materials[MAT_WATER], MAT_WATER);
+    // In single-phase model, MAT_WATER is always liquid
+    Phase phase = MATERIAL_PROPS[MAT_WATER].phase;
     if (phase != PHASE_LIQUID) {
-        TEST_FAIL("water should be liquid, got phase %d", phase);
+        TEST_FAIL("MAT_WATER should be liquid, got phase %d", phase);
     }
 
     // Print initial chunk info

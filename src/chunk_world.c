@@ -190,25 +190,10 @@ void world_mark_cell_active(ChunkWorld *world, int x, int y, int z) {
 
 // ============ TERRAIN INITIALIZATION ============
 
-// Calculate energy for material at temperature
+// Calculate energy for material at temperature (single-phase: E = n * Cp * T)
 static double calculate_energy_for_temperature(double moles, MaterialType type, double temp_k) {
     const MaterialProperties *props = &MATERIAL_PROPS[type];
-    double Cp_s = props->molar_heat_capacity_solid;
-    double Cp_l = props->molar_heat_capacity_liquid;
-    double Cp_g = props->molar_heat_capacity_gas;
-    double Tm = props->melting_point;
-    double Tb = props->boiling_point;
-    double Hf = props->enthalpy_fusion;
-    double Hv = props->enthalpy_vaporization;
-
-    if (temp_k <= Tm) {
-        return moles * Cp_s * temp_k;
-    } else if (temp_k <= Tb) {
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (temp_k - Tm);
-    } else {
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (Tb - Tm)
-             + moles * Hv + moles * Cp_g * (temp_k - Tb);
-    }
+    return moles * props->molar_heat_capacity * temp_k;
 }
 
 void world_init_terrain(ChunkWorld *world, int terrain_height[TERRAIN_RESOLUTION][TERRAIN_RESOLUTION]) {
@@ -264,13 +249,13 @@ void world_add_heat_at(ChunkWorld *world, float wx, float wy, float wz, double e
     // Distribute heat proportionally by heat capacity
     double total_hc = 0;
     CELL_FOR_EACH_MATERIAL(cell, type) {
-        double Cp = get_effective_heat_capacity(&cell->materials[type], type);
+        double Cp = MATERIAL_PROPS[type].molar_heat_capacity;
         total_hc += cell->materials[type].moles * Cp;
     }
 
     if (total_hc > 0) {
         CELL_FOR_EACH_MATERIAL(cell, type) {
-            double Cp = get_effective_heat_capacity(&cell->materials[type], type);
+            double Cp = MATERIAL_PROPS[type].molar_heat_capacity;
             double fraction = (cell->materials[type].moles * Cp) / total_hc;
             cell->materials[type].thermal_energy += energy * fraction;
             if (cell->materials[type].thermal_energy < 0) {
@@ -342,8 +327,7 @@ CellInfo world_get_cell_info(ChunkWorld *world, float wx, float wy, float wz) {
         info.temperature = cell_get_temperature(cell);
 
         if (primary_type != MAT_NONE) {
-            info.primary_phase = material_get_phase_from_energy(
-                &cell->materials[primary_type], primary_type);
+            info.primary_phase = MATERIAL_PROPS[primary_type].phase;
         }
     }
 

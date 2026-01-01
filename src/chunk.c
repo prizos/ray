@@ -3,88 +3,231 @@
 #include <string.h>
 
 // ============ MATERIAL PROPERTIES TABLE ============
+// Each material is a single phase with links to related phases.
+// Phase transitions convert between linked materials.
 
 const MaterialProperties MATERIAL_PROPS[MAT_COUNT] = {
+    // ===== MAT_NONE =====
     [MAT_NONE] = {
         .name = "None", .formula = "-",
-        .molar_mass = 0, .molar_volume_solid = 0, .molar_volume_liquid = 0, .molar_volume_gas = 0,
-        .molar_heat_capacity_solid = 1, .molar_heat_capacity_liquid = 1, .molar_heat_capacity_gas = 1,
-        .melting_point = 0, .boiling_point = 0, .enthalpy_fusion = 0, .enthalpy_vaporization = 0,
+        .phase = PHASE_GAS,
+        .molar_mass = 0, .molar_volume = 0, .molar_heat_capacity = 1,
         .thermal_conductivity = 0, .viscosity = 0,
+        .solid_form = MAT_NONE, .liquid_form = MAT_NONE, .gas_form = MAT_NONE,
+        .transition_temp_down = 0, .transition_temp_up = 0,
+        .enthalpy_down = 0, .enthalpy_up = 0,
         .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {0, 0, 0, 0}, .color_liquid = {0, 0, 0, 0}, .color_gas = {0, 0, 0, 0}
+        .color = {0, 0, 0, 0}
     },
-    [MAT_AIR] = {
-        .name = "Air", .formula = "N2/O2",
-        .molar_mass = 0.029, .molar_volume_solid = 0, .molar_volume_liquid = 0, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 29, .molar_heat_capacity_liquid = 29, .molar_heat_capacity_gas = 29,
-        .melting_point = 60, .boiling_point = 80, .enthalpy_fusion = 720, .enthalpy_vaporization = 5600,
-        .thermal_conductivity = 0.026, .viscosity = 0.000018,
-        .is_oxidizer = true, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {200, 220, 255, 50}, .color_liquid = {180, 200, 240, 100}, .color_gas = {135, 206, 235, 30}
+
+    // ===== WATER PHASES (H2O) =====
+    [MAT_ICE] = {
+        .name = "Ice", .formula = "H2O",
+        .phase = PHASE_SOLID,
+        .molar_mass = 0.018, .molar_volume = 0.0000196, .molar_heat_capacity = 38.0,
+        .thermal_conductivity = 2.2, .viscosity = 0,  // Solid, no flow
+        .solid_form = MAT_NONE, .liquid_form = MAT_WATER, .gas_form = MAT_STEAM,
+        .transition_temp_down = 0, .transition_temp_up = 273.15,  // Melts at 0°C
+        .enthalpy_down = 0, .enthalpy_up = 6010,  // Latent heat of fusion
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {200, 220, 255, 200}
     },
     [MAT_WATER] = {
         .name = "Water", .formula = "H2O",
-        .molar_mass = 0.018, .molar_volume_solid = 0.0000196, .molar_volume_liquid = 0.000018, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 38, .molar_heat_capacity_liquid = 75.3, .molar_heat_capacity_gas = 33.6,
-        .melting_point = 273.15, .boiling_point = 373.15, .enthalpy_fusion = 6010, .enthalpy_vaporization = 40660,
+        .phase = PHASE_LIQUID,
+        .molar_mass = 0.018, .molar_volume = 0.000018, .molar_heat_capacity = 75.3,
         .thermal_conductivity = 0.6, .viscosity = 0.001,
+        .solid_form = MAT_ICE, .liquid_form = MAT_NONE, .gas_form = MAT_STEAM,
+        .transition_temp_down = 273.15, .transition_temp_up = 373.15,  // Freezes at 0°C, boils at 100°C
+        .enthalpy_down = 6010, .enthalpy_up = 40660,  // Fusion / vaporization
         .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {200, 220, 255, 200}, .color_liquid = {64, 164, 223, 180}, .color_gas = {220, 220, 220, 100}
+        .color = {64, 164, 223, 180}
     },
+    [MAT_STEAM] = {
+        .name = "Steam", .formula = "H2O",
+        .phase = PHASE_GAS,
+        .molar_mass = 0.018, .molar_volume = 0.0245, .molar_heat_capacity = 33.6,
+        .thermal_conductivity = 0.025, .viscosity = 0.000013,
+        .solid_form = MAT_ICE, .liquid_form = MAT_WATER, .gas_form = MAT_NONE,
+        .transition_temp_down = 373.15, .transition_temp_up = 0,  // Condenses at 100°C
+        .enthalpy_down = 40660, .enthalpy_up = 0,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {240, 240, 240, 80}
+    },
+
+    // ===== ROCK PHASES (SiO2) =====
     [MAT_ROCK] = {
         .name = "Rock", .formula = "SiO2",
-        .molar_mass = 0.060, .molar_volume_solid = 0.0000227, .molar_volume_liquid = 0.0000273, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 44.4, .molar_heat_capacity_liquid = 82.6, .molar_heat_capacity_gas = 47.4,
-        .melting_point = 1986, .boiling_point = 2503, .enthalpy_fusion = 9600, .enthalpy_vaporization = 520000,
-        .thermal_conductivity = 1.4, .viscosity = 10000000,
+        .phase = PHASE_SOLID,
+        .molar_mass = 0.060, .molar_volume = 0.0000227, .molar_heat_capacity = 44.4,
+        .thermal_conductivity = 1.4, .viscosity = 0,  // Solid
+        .solid_form = MAT_NONE, .liquid_form = MAT_MAGMA, .gas_form = MAT_ROCK_VAPOR,
+        .transition_temp_down = 0, .transition_temp_up = 1986,  // Melts at 1986K
+        .enthalpy_down = 0, .enthalpy_up = 9600,
         .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {128, 128, 128, 255}, .color_liquid = {255, 100, 50, 255}, .color_gas = {200, 150, 100, 100}
+        .color = {128, 128, 128, 255}
     },
+    [MAT_MAGMA] = {
+        .name = "Magma", .formula = "SiO2",
+        .phase = PHASE_LIQUID,
+        .molar_mass = 0.060, .molar_volume = 0.0000273, .molar_heat_capacity = 82.6,
+        .thermal_conductivity = 1.0, .viscosity = 10000000,  // Very viscous
+        .solid_form = MAT_ROCK, .liquid_form = MAT_NONE, .gas_form = MAT_ROCK_VAPOR,
+        .transition_temp_down = 1986, .transition_temp_up = 2503,
+        .enthalpy_down = 9600, .enthalpy_up = 520000,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {255, 100, 50, 255}
+    },
+    [MAT_ROCK_VAPOR] = {
+        .name = "Rock Vapor", .formula = "SiO2",
+        .phase = PHASE_GAS,
+        .molar_mass = 0.060, .molar_volume = 0.0245, .molar_heat_capacity = 47.4,
+        .thermal_conductivity = 0.1, .viscosity = 0.00005,
+        .solid_form = MAT_ROCK, .liquid_form = MAT_MAGMA, .gas_form = MAT_NONE,
+        .transition_temp_down = 2503, .transition_temp_up = 0,
+        .enthalpy_down = 520000, .enthalpy_up = 0,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {200, 150, 100, 100}
+    },
+
+    // ===== DIRT PHASES (soil) =====
     [MAT_DIRT] = {
         .name = "Dirt", .formula = "soil",
-        .molar_mass = 0.050, .molar_volume_solid = 0.00002, .molar_volume_liquid = 0.000025, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 40, .molar_heat_capacity_liquid = 60, .molar_heat_capacity_gas = 40,
-        .melting_point = 1500, .boiling_point = 2500, .enthalpy_fusion = 8000, .enthalpy_vaporization = 400000,
-        .thermal_conductivity = 0.5, .viscosity = 5000000,
+        .phase = PHASE_SOLID,
+        .molar_mass = 0.050, .molar_volume = 0.00002, .molar_heat_capacity = 40.0,
+        .thermal_conductivity = 0.5, .viscosity = 0,
+        .solid_form = MAT_NONE, .liquid_form = MAT_MUD, .gas_form = MAT_DIRT_VAPOR,
+        .transition_temp_down = 0, .transition_temp_up = 1500,
+        .enthalpy_down = 0, .enthalpy_up = 8000,
         .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {139, 90, 43, 255}, .color_liquid = {180, 100, 50, 255}, .color_gas = {150, 120, 80, 100}
+        .color = {139, 90, 43, 255}
+    },
+    [MAT_MUD] = {
+        .name = "Mud", .formula = "soil",
+        .phase = PHASE_LIQUID,
+        .molar_mass = 0.050, .molar_volume = 0.000025, .molar_heat_capacity = 60.0,
+        .thermal_conductivity = 0.4, .viscosity = 5000000,
+        .solid_form = MAT_DIRT, .liquid_form = MAT_NONE, .gas_form = MAT_DIRT_VAPOR,
+        .transition_temp_down = 1500, .transition_temp_up = 2500,
+        .enthalpy_down = 8000, .enthalpy_up = 400000,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {180, 100, 50, 255}
+    },
+    [MAT_DIRT_VAPOR] = {
+        .name = "Dirt Vapor", .formula = "soil",
+        .phase = PHASE_GAS,
+        .molar_mass = 0.050, .molar_volume = 0.0245, .molar_heat_capacity = 40.0,
+        .thermal_conductivity = 0.1, .viscosity = 0.00005,
+        .solid_form = MAT_DIRT, .liquid_form = MAT_MUD, .gas_form = MAT_NONE,
+        .transition_temp_down = 2500, .transition_temp_up = 0,
+        .enthalpy_down = 400000, .enthalpy_up = 0,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {150, 120, 80, 100}
+    },
+
+    // ===== NITROGEN PHASES (N2) =====
+    [MAT_SOLID_NITROGEN] = {
+        .name = "Solid Nitrogen", .formula = "N2",
+        .phase = PHASE_SOLID,
+        .molar_mass = 0.028, .molar_volume = 0.0000159, .molar_heat_capacity = 25.7,
+        .thermal_conductivity = 0.2, .viscosity = 0,
+        .solid_form = MAT_NONE, .liquid_form = MAT_LIQUID_NITROGEN, .gas_form = MAT_NITROGEN,
+        .transition_temp_down = 0, .transition_temp_up = 63.15,  // Melts at 63K
+        .enthalpy_down = 0, .enthalpy_up = 720,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {200, 200, 255, 200}
+    },
+    [MAT_LIQUID_NITROGEN] = {
+        .name = "Liquid Nitrogen", .formula = "N2",
+        .phase = PHASE_LIQUID,
+        .molar_mass = 0.028, .molar_volume = 0.0000347, .molar_heat_capacity = 56.0,
+        .thermal_conductivity = 0.14, .viscosity = 0.000158,
+        .solid_form = MAT_SOLID_NITROGEN, .liquid_form = MAT_NONE, .gas_form = MAT_NITROGEN,
+        .transition_temp_down = 63.15, .transition_temp_up = 77.36,  // Boils at 77K
+        .enthalpy_down = 720, .enthalpy_up = 5560,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {180, 180, 240, 150}
     },
     [MAT_NITROGEN] = {
         .name = "Nitrogen", .formula = "N2",
-        .molar_mass = 0.028, .molar_volume_solid = 0.0000159, .molar_volume_liquid = 0.0000347, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 25.7, .molar_heat_capacity_liquid = 56.0, .molar_heat_capacity_gas = 29.1,
-        .melting_point = 63.15, .boiling_point = 77.36, .enthalpy_fusion = 720, .enthalpy_vaporization = 5560,
+        .phase = PHASE_GAS,
+        .molar_mass = 0.028, .molar_volume = 0.0245, .molar_heat_capacity = 29.1,
         .thermal_conductivity = 0.026, .viscosity = 0.0000178,
+        .solid_form = MAT_SOLID_NITROGEN, .liquid_form = MAT_LIQUID_NITROGEN, .gas_form = MAT_NONE,
+        .transition_temp_down = 77.36, .transition_temp_up = 0,
+        .enthalpy_down = 5560, .enthalpy_up = 0,
         .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {200, 200, 255, 200}, .color_liquid = {180, 180, 240, 150}, .color_gas = {220, 220, 255, 20}
+        .color = {220, 220, 255, 20}
+    },
+
+    // ===== OXYGEN PHASES (O2) =====
+    [MAT_SOLID_OXYGEN] = {
+        .name = "Solid Oxygen", .formula = "O2",
+        .phase = PHASE_SOLID,
+        .molar_mass = 0.032, .molar_volume = 0.0000139, .molar_heat_capacity = 23.0,
+        .thermal_conductivity = 0.17, .viscosity = 0,
+        .solid_form = MAT_NONE, .liquid_form = MAT_LIQUID_OXYGEN, .gas_form = MAT_OXYGEN,
+        .transition_temp_down = 0, .transition_temp_up = 54.36,  // Melts at 54K
+        .enthalpy_down = 0, .enthalpy_up = 444,
+        .is_oxidizer = true, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {180, 200, 255, 200}
+    },
+    [MAT_LIQUID_OXYGEN] = {
+        .name = "Liquid Oxygen", .formula = "O2",
+        .phase = PHASE_LIQUID,
+        .molar_mass = 0.032, .molar_volume = 0.0000280, .molar_heat_capacity = 53.0,
+        .thermal_conductivity = 0.15, .viscosity = 0.000195,
+        .solid_form = MAT_SOLID_OXYGEN, .liquid_form = MAT_NONE, .gas_form = MAT_OXYGEN,
+        .transition_temp_down = 54.36, .transition_temp_up = 90.19,  // Boils at 90K
+        .enthalpy_down = 444, .enthalpy_up = 6820,
+        .is_oxidizer = true, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {150, 180, 255, 150}
     },
     [MAT_OXYGEN] = {
         .name = "Oxygen", .formula = "O2",
-        .molar_mass = 0.032, .molar_volume_solid = 0.0000139, .molar_volume_liquid = 0.0000280, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 23.0, .molar_heat_capacity_liquid = 53.0, .molar_heat_capacity_gas = 29.4,
-        .melting_point = 54.36, .boiling_point = 90.19, .enthalpy_fusion = 444, .enthalpy_vaporization = 6820,
+        .phase = PHASE_GAS,
+        .molar_mass = 0.032, .molar_volume = 0.0245, .molar_heat_capacity = 29.4,
         .thermal_conductivity = 0.027, .viscosity = 0.0000207,
+        .solid_form = MAT_SOLID_OXYGEN, .liquid_form = MAT_LIQUID_OXYGEN, .gas_form = MAT_NONE,
+        .transition_temp_down = 90.19, .transition_temp_up = 0,
+        .enthalpy_down = 6820, .enthalpy_up = 0,
         .is_oxidizer = true, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {180, 200, 255, 200}, .color_liquid = {150, 180, 255, 150}, .color_gas = {200, 220, 255, 20}
+        .color = {200, 220, 255, 20}
+    },
+
+    // ===== CARBON DIOXIDE PHASES (CO2) =====
+    [MAT_DRY_ICE] = {
+        .name = "Dry Ice", .formula = "CO2",
+        .phase = PHASE_SOLID,
+        .molar_mass = 0.044, .molar_volume = 0.0000286, .molar_heat_capacity = 47.0,
+        .thermal_conductivity = 0.15, .viscosity = 0,
+        .solid_form = MAT_NONE, .liquid_form = MAT_LIQUID_CO2, .gas_form = MAT_CARBON_DIOXIDE,
+        .transition_temp_down = 0, .transition_temp_up = 195,  // Sublimes at 195K (1 atm)
+        .enthalpy_down = 0, .enthalpy_up = 25200,  // Sublimation enthalpy
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {220, 220, 220, 200}
+    },
+    [MAT_LIQUID_CO2] = {
+        .name = "Liquid CO2", .formula = "CO2",
+        .phase = PHASE_LIQUID,
+        .molar_mass = 0.044, .molar_volume = 0.0000370, .molar_heat_capacity = 85.0,
+        .thermal_conductivity = 0.1, .viscosity = 0.00007,
+        .solid_form = MAT_DRY_ICE, .liquid_form = MAT_NONE, .gas_form = MAT_CARBON_DIOXIDE,
+        .transition_temp_down = 216.55, .transition_temp_up = 304.25,  // Triple to critical
+        .enthalpy_down = 9020, .enthalpy_up = 16700,
+        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
+        .color = {200, 200, 200, 150}
     },
     [MAT_CARBON_DIOXIDE] = {
         .name = "Carbon Dioxide", .formula = "CO2",
-        .molar_mass = 0.044, .molar_volume_solid = 0.0000286, .molar_volume_liquid = 0.0000370, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 47.0, .molar_heat_capacity_liquid = 85.0, .molar_heat_capacity_gas = 37.1,
-        .melting_point = 216.55, .boiling_point = 194.65, .enthalpy_fusion = 9020, .enthalpy_vaporization = 16700,
+        .phase = PHASE_GAS,
+        .molar_mass = 0.044, .molar_volume = 0.0245, .molar_heat_capacity = 37.1,
         .thermal_conductivity = 0.015, .viscosity = 0.0000150,
+        .solid_form = MAT_DRY_ICE, .liquid_form = MAT_LIQUID_CO2, .gas_form = MAT_NONE,
+        .transition_temp_down = 195, .transition_temp_up = 0,  // Deposits at 195K
+        .enthalpy_down = 25200, .enthalpy_up = 0,
         .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {220, 220, 220, 200}, .color_liquid = {200, 200, 200, 150}, .color_gas = {180, 180, 180, 30}
-    },
-    [MAT_STEAM] = {
-        .name = "Steam", .formula = "H2O(g)",
-        .molar_mass = 0.018, .molar_volume_solid = 0.0000196, .molar_volume_liquid = 0.000018, .molar_volume_gas = 0.0224,
-        .molar_heat_capacity_solid = 38, .molar_heat_capacity_liquid = 75.3, .molar_heat_capacity_gas = 33.6,
-        .melting_point = 273.15, .boiling_point = 373.15, .enthalpy_fusion = 6010, .enthalpy_vaporization = 40660,
-        .thermal_conductivity = 0.025, .viscosity = 0.000013,
-        .is_oxidizer = false, .is_fuel = false, .ignition_temp = 0, .enthalpy_combustion = 0,
-        .color_solid = {200, 220, 255, 200}, .color_liquid = {64, 164, 223, 180}, .color_gas = {240, 240, 240, 80}
+        .color = {180, 180, 180, 30}
     },
 };
 
@@ -158,26 +301,9 @@ const MaterialEntry* cell_find_material_const(const Cell3D *cell, MaterialType t
     return &tls_entry;
 }
 
-// ============ ENERGY THRESHOLD CALCULATION ============
-
-static void calculate_energy_thresholds(double n, MaterialType type,
-                                         double *E_melt_start, double *E_melt_end,
-                                         double *E_boil_start, double *E_boil_end) {
-    const MaterialProperties *props = &MATERIAL_PROPS[type];
-    double Cp_s = props->molar_heat_capacity_solid;
-    double Cp_l = props->molar_heat_capacity_liquid;
-    double Tm = props->melting_point;
-    double Tb = props->boiling_point;
-    double Hf = props->enthalpy_fusion;
-    double Hv = props->enthalpy_vaporization;
-
-    *E_melt_start = n * Cp_s * Tm;
-    *E_melt_end = *E_melt_start + n * Hf;
-    *E_boil_start = *E_melt_end + n * Cp_l * (Tb - Tm);
-    *E_boil_end = *E_boil_start + n * Hv;
-}
-
 // ============ MATERIAL FUNCTIONS ============
+// Simplified for single-phase materials.
+// Phase is intrinsic to each MaterialType.
 
 double material_get_temperature(MaterialState *state, MaterialType type) {
     // Return cached value if valid
@@ -188,91 +314,123 @@ double material_get_temperature(MaterialState *state, MaterialType type) {
     const MaterialProperties *props = &MATERIAL_PROPS[type];
     double n = state->moles;
     double E = state->thermal_energy;
-    double Cp_s = props->molar_heat_capacity_solid;
-    double Cp_l = props->molar_heat_capacity_liquid;
-    double Cp_g = props->molar_heat_capacity_gas;
+    double Cp = props->molar_heat_capacity;
 
-    if (n < MOLES_EPSILON || Cp_s < 1e-10) {
+    if (n < MOLES_EPSILON || Cp < 1e-10) {
         state->cached_temp = 0.0;
         state->temp_valid = true;
         return 0.0;
     }
 
-    if (E < 0) {
-        state->cached_temp = E / (n * Cp_s);
-        state->temp_valid = true;
-        return state->cached_temp;
-    }
-
-    double E_melt_start, E_melt_end, E_boil_start, E_boil_end;
-    calculate_energy_thresholds(n, type, &E_melt_start, &E_melt_end, &E_boil_start, &E_boil_end);
-
-    double Tm = props->melting_point;
-    double Tb = props->boiling_point;
-    double temp;
-
-    if (E < E_melt_start) {
-        temp = E / (n * Cp_s);
-    } else if (E < E_melt_end) {
-        temp = Tm;
-    } else if (E < E_boil_start) {
-        temp = Tm + (E - E_melt_end) / (n * Cp_l);
-    } else if (E < E_boil_end) {
-        temp = Tb;
-    } else {
-        temp = Tb + (E - E_boil_end) / (n * Cp_g);
-    }
+    // Simple: T = E / (n * Cp)
+    // For single-phase materials, no phase transition plateaus
+    double temp = E / (n * Cp);
 
     state->cached_temp = temp;
     state->temp_valid = true;
     return temp;
 }
 
-Phase material_get_phase(MaterialType type, double temp_k) {
-    const MaterialProperties *props = &MATERIAL_PROPS[type];
-    if (temp_k < props->melting_point) return PHASE_SOLID;
-    if (temp_k < props->boiling_point) return PHASE_LIQUID;
-    return PHASE_GAS;
-}
-
-Phase material_get_phase_from_energy(const MaterialState *state, MaterialType type) {
-    double n = state->moles;
-    double E = state->thermal_energy;
-
-    if (n < MOLES_EPSILON) return PHASE_GAS;
-
-    double E_melt_start, E_melt_end, E_boil_start, E_boil_end;
-    calculate_energy_thresholds(n, type, &E_melt_start, &E_melt_end, &E_boil_start, &E_boil_end);
-
-    if (E < E_melt_end) return PHASE_SOLID;
-    if (E < E_boil_end) return PHASE_LIQUID;
-    return PHASE_GAS;
-}
-
-double get_effective_heat_capacity(const MaterialState *state, MaterialType type) {
-    Phase phase = material_get_phase_from_energy(state, type);
-    const MaterialProperties *props = &MATERIAL_PROPS[type];
-
-    switch (phase) {
-        case PHASE_SOLID: return props->molar_heat_capacity_solid;
-        case PHASE_LIQUID: return props->molar_heat_capacity_liquid;
-        case PHASE_GAS: return props->molar_heat_capacity_gas;
-    }
-    return props->molar_heat_capacity_solid;
-}
-
 double material_get_mass(const MaterialState *state, MaterialType type) {
     return state->moles * MATERIAL_PROPS[type].molar_mass;
 }
 
-double material_get_volume(const MaterialState *state, MaterialType type, Phase phase) {
+// Volume is now single-valued per material (no phase parameter needed)
+double material_get_volume(const MaterialState *state, MaterialType type) {
+    return state->moles * MATERIAL_PROPS[type].molar_volume;
+}
+
+// Density from first principles: ρ = molar_mass / molar_volume
+// Returns density in kg/m³
+double material_get_density(MaterialType type) {
     const MaterialProperties *props = &MATERIAL_PROPS[type];
-    switch (phase) {
-        case PHASE_SOLID: return state->moles * props->molar_volume_solid;
-        case PHASE_LIQUID: return state->moles * props->molar_volume_liquid;
-        case PHASE_GAS: return state->moles * props->molar_volume_gas;
+    if (props->molar_volume <= 0) return 0;
+    return props->molar_mass / props->molar_volume;  // kg/m³
+}
+
+// ============ PHASE TRANSITION FUNCTIONS ============
+
+// Check if material should transition to another phase based on temperature
+// Returns the target MaterialType, or MAT_NONE if no transition needed
+MaterialType material_check_transition(MaterialType type, double temp_k) {
+    const MaterialProperties *props = &MATERIAL_PROPS[type];
+
+    // Check heating transition (to lighter phase)
+    if (props->transition_temp_up > 0 && temp_k > props->transition_temp_up) {
+        // For solids: melt to liquid, or sublimate to gas
+        if (props->phase == PHASE_SOLID) {
+            return (props->liquid_form != MAT_NONE) ? props->liquid_form : props->gas_form;
+        }
+        // For liquids: boil to gas
+        if (props->phase == PHASE_LIQUID && props->gas_form != MAT_NONE) {
+            return props->gas_form;
+        }
     }
-    return 0;
+
+    // Check cooling transition (to denser phase)
+    if (props->transition_temp_down > 0 && temp_k < props->transition_temp_down) {
+        // For gases: condense to liquid, or deposit to solid
+        if (props->phase == PHASE_GAS) {
+            return (props->liquid_form != MAT_NONE) ? props->liquid_form : props->solid_form;
+        }
+        // For liquids: freeze to solid
+        if (props->phase == PHASE_LIQUID && props->solid_form != MAT_NONE) {
+            return props->solid_form;
+        }
+    }
+
+    return MAT_NONE;  // No transition
+}
+
+// Convert material from one phase to another (conserves moles and energy)
+void material_convert_phase(Cell3D *cell, MaterialType from, MaterialType to) {
+    if (!CELL_HAS_MATERIAL(cell, from)) return;
+    if (to == MAT_NONE || to == from) return;
+
+    double moles = cell->materials[from].moles;
+    double energy = cell->materials[from].thermal_energy;
+
+    const MaterialProperties *props_from = &MATERIAL_PROPS[from];
+    const MaterialProperties *props_to = &MATERIAL_PROPS[to];
+
+    // Adjust energy for latent heat
+    // If transitioning to lighter phase (heating), subtract latent heat absorbed
+    // If transitioning to denser phase (cooling), add latent heat released
+    if (props_to->phase > props_from->phase) {
+        // Heating: solid->liquid or liquid->gas
+        energy -= moles * props_from->enthalpy_up;
+    } else if (props_to->phase < props_from->phase) {
+        // Cooling: gas->liquid or liquid->solid
+        energy += moles * props_from->enthalpy_down;
+    }
+
+    // Remove old material
+    cell_remove_material(cell, from);
+
+    // Add new material with adjusted energy
+    cell_add_material(cell, to, moles, energy);
+}
+
+// Calculate effective density for multi-material cell
+// Weighted by mass and volume: ρ = total_mass / total_volume
+double cell_get_density(const Cell3D *cell) {
+    if (cell->present == 0) return 0;
+
+    double total_mass = 0;    // kg
+    double total_volume = 0;  // m³
+
+    CELL_FOR_EACH_MATERIAL(cell, type) {
+        const MaterialState *state = &cell->materials[type];
+        const MaterialProperties *props = &MATERIAL_PROPS[type];
+
+        if (props->molar_volume > 0) {
+            total_mass += state->moles * props->molar_mass;
+            total_volume += state->moles * props->molar_volume;
+        }
+    }
+
+    if (total_volume <= 0) return 0;
+    return total_mass / total_volume;  // kg/m³
 }
 
 double cell_get_temperature(Cell3D *cell) {
@@ -283,7 +441,7 @@ double cell_get_temperature(Cell3D *cell) {
 
     CELL_FOR_EACH_MATERIAL(cell, type) {
         double temp = material_get_temperature(&cell->materials[type], type);
-        double Cp = get_effective_heat_capacity(&cell->materials[type], type);
+        double Cp = MATERIAL_PROPS[type].molar_heat_capacity;
         double hc = cell->materials[type].moles * Cp;
         weighted_temp_sum += temp * hc;
         total_heat_capacity += hc;
@@ -296,10 +454,13 @@ double cell_get_temperature(Cell3D *cell) {
 double cell_get_total_volume(const Cell3D *cell) {
     double total = 0;
     CELL_FOR_EACH_MATERIAL(cell, type) {
-        Phase phase = material_get_phase_from_energy(&cell->materials[type], type);
-        total += material_get_volume(&cell->materials[type], type, phase);
+        total += material_get_volume(&cell->materials[type], type);
     }
     return total;
+}
+
+double cell_get_available_volume(const Cell3D *cell) {
+    return CELL_VOLUME_CAPACITY - cell_get_total_volume(cell);
 }
 
 // ============ CHUNK FUNCTIONS ============

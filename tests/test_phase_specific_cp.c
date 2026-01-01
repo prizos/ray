@@ -1,16 +1,16 @@
 /**
- * test_phase_specific_cp.c - Phase-Specific Heat Capacity Tests
+ * test_phase_specific_cp.c - Single-Phase Material Heat Capacity Tests
  *
- * Theory: Heat capacity varies significantly between phases for most substances.
- * Using a single Cp for all phases introduces thermodynamic errors.
+ * New model: Each MaterialType has exactly ONE phase and ONE heat capacity.
+ * Phase transitions are handled by converting between material types.
  *
  * Scientific basis:
- * - Ice (solid H2O): Cp_s = 38.0 J/(mol·K)
- * - Water (liquid H2O): Cp_l = 75.3 J/(mol·K)
- * - Steam (gas H2O): Cp_g = 33.6 J/(mol·K)
+ * - MAT_ICE (solid H2O): Cp = 38.0 J/(mol·K)
+ * - MAT_WATER (liquid H2O): Cp = 75.3 J/(mol·K)
+ * - MAT_STEAM (gas H2O): Cp = 33.6 J/(mol·K)
  *
- * The energy required to heat a substance depends on which phase it's in.
- * Energy thresholds and temperature calculations must use the correct Cp.
+ * Temperature calculation: T = E / (n * Cp)
+ * Energy calculation: E = n * Cp * T
  */
 
 #include <stdio.h>
@@ -59,354 +59,169 @@ static int tests_failed = 0;
     } \
 } while(0)
 
-// ============ REFERENCE VALUES (from CLAUDE.md) ============
+// ============ REFERENCE VALUES ============
 
-// Water (H2O) - significant variation between phases
-#define REF_H2O_CP_S  38.0    // J/(mol·K) solid (ice)
-#define REF_H2O_CP_L  75.3    // J/(mol·K) liquid (water)
-#define REF_H2O_CP_G  33.6    // J/(mol·K) gas (steam)
-#define REF_H2O_TM    273.15  // K melting point
-#define REF_H2O_TB    373.15  // K boiling point
-#define REF_H2O_HF    6010.0  // J/mol enthalpy of fusion
-#define REF_H2O_HV    40660.0 // J/mol enthalpy of vaporization
+// Water phases as separate materials
+#define REF_ICE_CP     38.0    // J/(mol·K) MAT_ICE
+#define REF_WATER_CP   75.3    // J/(mol·K) MAT_WATER
+#define REF_STEAM_CP   33.6    // J/(mol·K) MAT_STEAM
 
-// Rock (SiO2)
-#define REF_SIO2_CP_S 44.4
-#define REF_SIO2_CP_L 82.6
-#define REF_SIO2_CP_G 47.4
-#define REF_SIO2_TM   1986.0
-#define REF_SIO2_TB   2503.0
-#define REF_SIO2_HF   9600.0
-#define REF_SIO2_HV   600000.0
+// Rock phases as separate materials
+#define REF_ROCK_CP    44.4    // J/(mol·K) MAT_ROCK
+#define REF_MAGMA_CP   82.6    // J/(mol·K) MAT_MAGMA
 
-// ============ HELPER: Calculate energy using phase-specific Cp ============
-// This is what the implementation SHOULD do
+// ============ TEST: Each material has single Cp ============
 
-static double calculate_correct_energy(double moles, double temp_k,
-                                       double Cp_s, double Cp_l, double Cp_g,
-                                       double Tm, double Tb, double Hf, double Hv) {
-    if (temp_k <= Tm) {
-        // Solid phase: E = n * Cp_s * T
-        return moles * Cp_s * temp_k;
-    } else if (temp_k <= Tb) {
-        // Liquid phase: E = (solid to Tm) + Hf + (liquid from Tm to T)
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (temp_k - Tm);
-    } else {
-        // Gas phase: E = (solid to Tm) + Hf + (liquid to Tb) + Hv + (gas from Tb to T)
-        return moles * Cp_s * Tm + moles * Hf + moles * Cp_l * (Tb - Tm)
-             + moles * Hv + moles * Cp_g * (temp_k - Tb);
+static void test_material_has_single_cp(void) {
+    TEST_BEGIN("each material has single molar_heat_capacity");
+
+    // All materials (except MAT_NONE) should have positive Cp
+    for (int i = 1; i < MAT_COUNT; i++) {
+        const MaterialProperties *props = &MATERIAL_PROPS[i];
+        ASSERT(props->molar_heat_capacity > 0,
+               "%s should have positive Cp", props->name);
     }
-}
-
-// ============ TEST: MaterialProperties has phase-specific Cp fields ============
-
-static void test_material_properties_has_phase_specific_cp(void) {
-    TEST_BEGIN("MaterialProperties has phase-specific Cp fields");
-
-    const MaterialProperties *water = &MATERIAL_PROPS[MAT_WATER];
-
-    // These fields must exist and be accessible
-    // If compilation fails here, the struct needs updating
-    double cp_s = water->molar_heat_capacity_solid;
-    double cp_l = water->molar_heat_capacity_liquid;
-    double cp_g = water->molar_heat_capacity_gas;
-
-    // They should be different for water (ice vs water vs steam)
-    ASSERT(cp_s != cp_l, "Cp_s should differ from Cp_l for water");
-    ASSERT(cp_l != cp_g, "Cp_l should differ from Cp_g for water");
 
     TEST_PASS();
 }
 
-// ============ TEST: Water Cp values match reference ============
+// ============ TEST: Water phase Cp values match reference ============
 
-static void test_water_cp_values(void) {
-    TEST_BEGIN("water Cp values match reference");
+static void test_water_phase_cp_values(void) {
+    TEST_BEGIN("water phase Cp values match reference");
 
-    const MaterialProperties *water = &MATERIAL_PROPS[MAT_WATER];
-
-    ASSERT_FLOAT_EQ(water->molar_heat_capacity_solid, REF_H2O_CP_S, 0.1,
-                    "water Cp_s");
-    ASSERT_FLOAT_EQ(water->molar_heat_capacity_liquid, REF_H2O_CP_L, 0.1,
-                    "water Cp_l");
-    ASSERT_FLOAT_EQ(water->molar_heat_capacity_gas, REF_H2O_CP_G, 0.1,
-                    "water Cp_g");
-
-    TEST_PASS();
-}
-
-// ============ TEST: Rock Cp values match reference ============
-
-static void test_rock_cp_values(void) {
-    TEST_BEGIN("rock Cp values match reference");
-
-    const MaterialProperties *rock = &MATERIAL_PROPS[MAT_ROCK];
-
-    ASSERT_FLOAT_EQ(rock->molar_heat_capacity_solid, REF_SIO2_CP_S, 0.1,
-                    "rock Cp_s");
-    ASSERT_FLOAT_EQ(rock->molar_heat_capacity_liquid, REF_SIO2_CP_L, 0.1,
-                    "rock Cp_l");
-    ASSERT_FLOAT_EQ(rock->molar_heat_capacity_gas, REF_SIO2_CP_G, 0.1,
-                    "rock Cp_g");
+    // Each water phase is its own material with distinct Cp
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_ICE].molar_heat_capacity, REF_ICE_CP, 0.1,
+                    "MAT_ICE Cp");
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].molar_heat_capacity, REF_WATER_CP, 0.1,
+                    "MAT_WATER Cp");
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_STEAM].molar_heat_capacity, REF_STEAM_CP, 0.1,
+                    "MAT_STEAM Cp");
 
     TEST_PASS();
 }
 
-// ============ TEST: Temperature in solid phase uses Cp_s ============
+// ============ TEST: Rock phase Cp values match reference ============
 
-static void test_temperature_solid_phase_uses_cp_s(void) {
-    TEST_BEGIN("temperature in solid phase uses Cp_s");
+static void test_rock_phase_cp_values(void) {
+    TEST_BEGIN("rock phase Cp values match reference");
 
-    // Set up water at 200K (solid ice, below melting point 273K)
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_ROCK].molar_heat_capacity, REF_ROCK_CP, 0.1,
+                    "MAT_ROCK Cp");
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_MAGMA].molar_heat_capacity, REF_MAGMA_CP, 0.1,
+                    "MAT_MAGMA Cp");
+
+    TEST_PASS();
+}
+
+// ============ TEST: Temperature uses material's Cp ============
+
+static void test_temperature_uses_material_cp(void) {
+    TEST_BEGIN("temperature uses material's molar_heat_capacity");
+
+    // Test with MAT_ICE
     double moles = 1.0;
     double target_temp = 200.0;  // K
+    double Cp = MATERIAL_PROPS[MAT_ICE].molar_heat_capacity;
 
-    // Calculate energy using correct formula: E = n * Cp_s * T
-    double energy = moles * REF_H2O_CP_S * target_temp;
+    // E = n * Cp * T
+    double energy = moles * Cp * target_temp;
 
     MaterialState state = {
         .moles = moles,
-        .thermal_energy = energy
+        .thermal_energy = energy,
+        .cached_temp = 0.0
     };
 
-    double calculated_temp = material_get_temperature(&state, MAT_WATER);
+    double calculated_temp = material_get_temperature(&state, MAT_ICE);
 
     ASSERT_FLOAT_EQ(calculated_temp, target_temp, 0.1,
-                    "solid phase temperature");
+                    "ice temperature from energy");
 
     TEST_PASS();
 }
 
-// ============ TEST: Temperature in liquid phase uses Cp_l ============
+// ============ TEST: Different materials give different temps for same energy ============
 
-static void test_temperature_liquid_phase_uses_cp_l(void) {
-    TEST_BEGIN("temperature in liquid phase uses Cp_l");
-
-    // Set up water at 300K (liquid, between 273K and 373K)
-    double moles = 1.0;
-    double target_temp = 300.0;  // K
-
-    // Calculate energy for liquid at 300K:
-    // E = (solid to Tm) + Hf + (liquid from Tm to T)
-    // E = n*Cp_s*Tm + n*Hf + n*Cp_l*(T - Tm)
-    double energy = calculate_correct_energy(moles, target_temp,
-                                             REF_H2O_CP_S, REF_H2O_CP_L, REF_H2O_CP_G,
-                                             REF_H2O_TM, REF_H2O_TB,
-                                             REF_H2O_HF, REF_H2O_HV);
-
-    MaterialState state = {
-        .moles = moles,
-        .thermal_energy = energy
-    };
-
-    double calculated_temp = material_get_temperature(&state, MAT_WATER);
-
-    ASSERT_FLOAT_EQ(calculated_temp, target_temp, 0.1,
-                    "liquid phase temperature");
-
-    TEST_PASS();
-}
-
-// ============ TEST: Temperature in gas phase uses Cp_g ============
-
-static void test_temperature_gas_phase_uses_cp_g(void) {
-    TEST_BEGIN("temperature in gas phase uses Cp_g");
-
-    // Set up water at 400K (gas/steam, above boiling point 373K)
-    double moles = 1.0;
-    double target_temp = 400.0;  // K
-
-    // Calculate energy for gas at 400K
-    double energy = calculate_correct_energy(moles, target_temp,
-                                             REF_H2O_CP_S, REF_H2O_CP_L, REF_H2O_CP_G,
-                                             REF_H2O_TM, REF_H2O_TB,
-                                             REF_H2O_HF, REF_H2O_HV);
-
-    MaterialState state = {
-        .moles = moles,
-        .thermal_energy = energy
-    };
-
-    double calculated_temp = material_get_temperature(&state, MAT_WATER);
-
-    ASSERT_FLOAT_EQ(calculated_temp, target_temp, 0.1,
-                    "gas phase temperature");
-
-    TEST_PASS();
-}
-
-// ============ TEST: Melting plateau temperature is correct ============
-
-static void test_melting_plateau_temperature(void) {
-    TEST_BEGIN("melting plateau temperature equals Tm");
+static void test_different_cp_gives_different_temp(void) {
+    TEST_BEGIN("different Cp gives different temperature for same energy");
 
     double moles = 1.0;
+    double energy = 10000.0;  // J
 
-    // Energy at start of melting: E = n * Cp_s * Tm
-    double E_melt_start = moles * REF_H2O_CP_S * REF_H2O_TM;
+    // Same energy in ice vs water gives different temperature
+    MaterialState ice_state = { .moles = moles, .thermal_energy = energy, .cached_temp = 0.0 };
+    MaterialState water_state = { .moles = moles, .thermal_energy = energy, .cached_temp = 0.0 };
 
-    // Energy midway through melting (50% melted)
-    double E_mid_melt = E_melt_start + 0.5 * moles * REF_H2O_HF;
+    double ice_temp = material_get_temperature(&ice_state, MAT_ICE);
+    double water_temp = material_get_temperature(&water_state, MAT_WATER);
 
-    MaterialState state = {
-        .moles = moles,
-        .thermal_energy = E_mid_melt
-    };
+    // Ice has lower Cp (38) than water (75.3), so same energy = higher temp
+    ASSERT(ice_temp > water_temp,
+           "ice should be hotter than water with same energy");
 
-    double temp = material_get_temperature(&state, MAT_WATER);
+    // Verify quantitatively: T = E/(n*Cp)
+    double expected_ice_temp = energy / (moles * REF_ICE_CP);
+    double expected_water_temp = energy / (moles * REF_WATER_CP);
 
-    // During melting, temperature should be exactly Tm
-    ASSERT_FLOAT_EQ(temp, REF_H2O_TM, 0.01,
-                    "melting plateau temperature");
-
-    TEST_PASS();
-}
-
-// ============ TEST: Boiling plateau temperature is correct ============
-
-static void test_boiling_plateau_temperature(void) {
-    TEST_BEGIN("boiling plateau temperature equals Tb");
-
-    double moles = 1.0;
-
-    // Energy at start of boiling
-    double E_melt_start = moles * REF_H2O_CP_S * REF_H2O_TM;
-    double E_melt_end = E_melt_start + moles * REF_H2O_HF;
-    double E_boil_start = E_melt_end + moles * REF_H2O_CP_L * (REF_H2O_TB - REF_H2O_TM);
-
-    // Energy midway through boiling (50% vaporized)
-    double E_mid_boil = E_boil_start + 0.5 * moles * REF_H2O_HV;
-
-    MaterialState state = {
-        .moles = moles,
-        .thermal_energy = E_mid_boil
-    };
-
-    double temp = material_get_temperature(&state, MAT_WATER);
-
-    // During boiling, temperature should be exactly Tb
-    ASSERT_FLOAT_EQ(temp, REF_H2O_TB, 0.01,
-                    "boiling plateau temperature");
+    ASSERT_FLOAT_EQ(ice_temp, expected_ice_temp, 0.1, "ice temp calculation");
+    ASSERT_FLOAT_EQ(water_temp, expected_water_temp, 0.1, "water temp calculation");
 
     TEST_PASS();
 }
 
-// ============ TEST: Energy thresholds use correct Cp values ============
+// ============ TEST: Phase is intrinsic to material type ============
 
-static void test_energy_thresholds_use_correct_cp(void) {
-    TEST_BEGIN("energy thresholds use correct phase Cp");
+static void test_phase_is_intrinsic(void) {
+    TEST_BEGIN("phase is intrinsic to material type");
 
-    double moles = 1.0;
+    // Each material has exactly one phase
+    ASSERT(MATERIAL_PROPS[MAT_ICE].phase == PHASE_SOLID, "MAT_ICE should be solid");
+    ASSERT(MATERIAL_PROPS[MAT_WATER].phase == PHASE_LIQUID, "MAT_WATER should be liquid");
+    ASSERT(MATERIAL_PROPS[MAT_STEAM].phase == PHASE_GAS, "MAT_STEAM should be gas");
 
-    // Calculate expected thresholds using phase-specific Cp
-    double E_melt_start = moles * REF_H2O_CP_S * REF_H2O_TM;
-    double E_melt_end = E_melt_start + moles * REF_H2O_HF;
-    double E_boil_start = E_melt_end + moles * REF_H2O_CP_L * (REF_H2O_TB - REF_H2O_TM);
-    double E_boil_end = E_boil_start + moles * REF_H2O_HV;
-
-    // Test that material at each threshold gives correct temperature
-
-    // Just below melting: should be just below Tm
-    MaterialState state1 = { .moles = moles, .thermal_energy = E_melt_start - 100 };
-    double temp1 = material_get_temperature(&state1, MAT_WATER);
-    ASSERT(temp1 < REF_H2O_TM, "temp below E_melt_start should be < Tm");
-
-    // At melting plateau: should be Tm
-    MaterialState state2 = { .moles = moles, .thermal_energy = (E_melt_start + E_melt_end) / 2 };
-    double temp2 = material_get_temperature(&state2, MAT_WATER);
-    ASSERT_FLOAT_EQ(temp2, REF_H2O_TM, 0.01, "temp at melting plateau");
-
-    // Just after melting: should be just above Tm
-    MaterialState state3 = { .moles = moles, .thermal_energy = E_melt_end + 100 };
-    double temp3 = material_get_temperature(&state3, MAT_WATER);
-    ASSERT(temp3 > REF_H2O_TM && temp3 < REF_H2O_TB, "temp after E_melt_end should be in liquid range");
-
-    // At boiling plateau: should be Tb
-    MaterialState state4 = { .moles = moles, .thermal_energy = (E_boil_start + E_boil_end) / 2 };
-    double temp4 = material_get_temperature(&state4, MAT_WATER);
-    ASSERT_FLOAT_EQ(temp4, REF_H2O_TB, 0.01, "temp at boiling plateau");
-
-    // After boiling: should be > Tb
-    MaterialState state5 = { .moles = moles, .thermal_energy = E_boil_end + 1000 };
-    double temp5 = material_get_temperature(&state5, MAT_WATER);
-    ASSERT(temp5 > REF_H2O_TB, "temp after E_boil_end should be > Tb");
+    ASSERT(MATERIAL_PROPS[MAT_ROCK].phase == PHASE_SOLID, "MAT_ROCK should be solid");
+    ASSERT(MATERIAL_PROPS[MAT_MAGMA].phase == PHASE_LIQUID, "MAT_MAGMA should be liquid");
 
     TEST_PASS();
 }
 
-// ============ TEST: Phase determination uses correct energy thresholds ============
+// ============ TEST: Phase transition links exist ============
 
-static void test_phase_from_energy_uses_correct_thresholds(void) {
-    TEST_BEGIN("phase determination uses correct energy thresholds");
+static void test_phase_transition_links(void) {
+    TEST_BEGIN("phase transition links connect related materials");
 
-    double moles = 1.0;
+    // Water cycle: ice <-> water <-> steam
+    ASSERT(MATERIAL_PROPS[MAT_ICE].liquid_form == MAT_WATER, "ice melts to water");
+    ASSERT(MATERIAL_PROPS[MAT_WATER].solid_form == MAT_ICE, "water freezes to ice");
+    ASSERT(MATERIAL_PROPS[MAT_WATER].gas_form == MAT_STEAM, "water boils to steam");
+    ASSERT(MATERIAL_PROPS[MAT_STEAM].liquid_form == MAT_WATER, "steam condenses to water");
 
-    // Calculate thresholds
-    double E_melt_start = moles * REF_H2O_CP_S * REF_H2O_TM;
-    double E_melt_end = E_melt_start + moles * REF_H2O_HF;
-    double E_boil_start = E_melt_end + moles * REF_H2O_CP_L * (REF_H2O_TB - REF_H2O_TM);
-    double E_boil_end = E_boil_start + moles * REF_H2O_HV;
-
-    // Solid: E < E_melt_end
-    MaterialState solid = { .moles = moles, .thermal_energy = E_melt_start / 2 };
-    ASSERT(material_get_phase_from_energy(&solid, MAT_WATER) == PHASE_SOLID,
-           "should be solid below E_melt_end");
-
-    // Still solid during melting
-    MaterialState melting = { .moles = moles, .thermal_energy = (E_melt_start + E_melt_end) / 2 };
-    ASSERT(material_get_phase_from_energy(&melting, MAT_WATER) == PHASE_SOLID,
-           "should be solid during melting");
-
-    // Liquid: E_melt_end <= E < E_boil_end
-    MaterialState liquid = { .moles = moles, .thermal_energy = (E_melt_end + E_boil_start) / 2 };
-    ASSERT(material_get_phase_from_energy(&liquid, MAT_WATER) == PHASE_LIQUID,
-           "should be liquid between E_melt_end and E_boil_end");
-
-    // Still liquid during boiling
-    MaterialState boiling = { .moles = moles, .thermal_energy = (E_boil_start + E_boil_end) / 2 };
-    ASSERT(material_get_phase_from_energy(&boiling, MAT_WATER) == PHASE_LIQUID,
-           "should be liquid during boiling");
-
-    // Gas: E >= E_boil_end
-    MaterialState gas = { .moles = moles, .thermal_energy = E_boil_end + 1000 };
-    ASSERT(material_get_phase_from_energy(&gas, MAT_WATER) == PHASE_GAS,
-           "should be gas above E_boil_end");
+    // Rock cycle: rock <-> magma
+    ASSERT(MATERIAL_PROPS[MAT_ROCK].liquid_form == MAT_MAGMA, "rock melts to magma");
+    ASSERT(MATERIAL_PROPS[MAT_MAGMA].solid_form == MAT_ROCK, "magma solidifies to rock");
 
     TEST_PASS();
 }
 
-// ============ TEST: Roundtrip energy -> temperature -> energy ============
+// ============ TEST: Transition temperatures are set ============
 
-static void test_energy_temperature_roundtrip(void) {
-    TEST_BEGIN("energy -> temperature -> energy roundtrip");
+static void test_transition_temperatures(void) {
+    TEST_BEGIN("transition temperatures are defined");
 
-    // Test various temperatures across all phases
-    double test_temps[] = {100.0, 200.0, 273.15, 300.0, 350.0, 373.15, 400.0, 500.0};
-    int num_tests = sizeof(test_temps) / sizeof(test_temps[0]);
+    // Water transitions
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].transition_temp_down, 273.15, 0.1,
+                    "water freezing point");
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].transition_temp_up, 373.15, 0.1,
+                    "water boiling point");
 
-    for (int i = 0; i < num_tests; i++) {
-        double target_temp = test_temps[i];
-        double moles = 1.0;
+    // Ice melting point
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_ICE].transition_temp_up, 273.15, 0.1,
+                    "ice melting point");
 
-        // Calculate energy for this temperature
-        double energy = calculate_correct_energy(moles, target_temp,
-                                                 REF_H2O_CP_S, REF_H2O_CP_L, REF_H2O_CP_G,
-                                                 REF_H2O_TM, REF_H2O_TB,
-                                                 REF_H2O_HF, REF_H2O_HV);
-
-        // Skip plateau temperatures (they're ambiguous)
-        if (fabs(target_temp - REF_H2O_TM) < 0.1 || fabs(target_temp - REF_H2O_TB) < 0.1) {
-            continue;
-        }
-
-        MaterialState state = { .moles = moles, .thermal_energy = energy };
-        double calculated_temp = material_get_temperature(&state, MAT_WATER);
-
-        if (fabs(calculated_temp - target_temp) > 0.5) {
-            TEST_FAIL("roundtrip failed for T=%.1fK (got %.1fK)", target_temp, calculated_temp);
-            return;
-        }
-    }
+    // Steam condensation point
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_STEAM].transition_temp_down, 373.15, 0.1,
+                    "steam condensation point");
 
     TEST_PASS();
 }
@@ -416,32 +231,20 @@ static void test_energy_temperature_roundtrip(void) {
 int main(void) {
     printf("\n");
     printf("========================================\n");
-    printf("Phase-Specific Heat Capacity Tests\n");
-    printf("========================================\n");
+    printf("    SINGLE-PHASE Cp TESTS\n");
+    printf("========================================\n\n");
 
-    printf("\n=== STRUCT FIELDS ===\n\n");
-    test_material_properties_has_phase_specific_cp();
-
-    printf("\n=== REFERENCE VALUES ===\n\n");
-    test_water_cp_values();
-    test_rock_cp_values();
-
-    printf("\n=== TEMPERATURE CALCULATIONS ===\n\n");
-    test_temperature_solid_phase_uses_cp_s();
-    test_temperature_liquid_phase_uses_cp_l();
-    test_temperature_gas_phase_uses_cp_g();
-    test_melting_plateau_temperature();
-    test_boiling_plateau_temperature();
-
-    printf("\n=== ENERGY THRESHOLDS ===\n\n");
-    test_energy_thresholds_use_correct_cp();
-    test_phase_from_energy_uses_correct_thresholds();
-
-    printf("\n=== ROUNDTRIP ===\n\n");
-    test_energy_temperature_roundtrip();
+    test_material_has_single_cp();
+    test_water_phase_cp_values();
+    test_rock_phase_cp_values();
+    test_temperature_uses_material_cp();
+    test_different_cp_gives_different_temp();
+    test_phase_is_intrinsic();
+    test_phase_transition_links();
+    test_transition_temperatures();
 
     printf("\n========================================\n");
-    printf("Results: %d/%d tests passed", tests_passed, tests_run);
+    printf("Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {
         printf(" (%d FAILED)\n", tests_failed);
     } else {

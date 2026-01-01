@@ -162,13 +162,13 @@ static bool test_temperature_multiple_materials(void) {
 
     // Add water at 300K (liquid - needs latent heat)
     double water_moles = 1.0;
-    double water_hc = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid;  // 75.3 (liquid at 300K)
+    double water_hc = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity;  // 75.3 (liquid at 300K)
     double water_temp = 300.0;
     double water_energy = calculate_material_energy(MAT_WATER, water_moles, water_temp);
 
     // Add rock at 400K (solid below melting point of ~1983K for SiO2)
     double rock_moles = 1.0;
-    double rock_hc = MATERIAL_PROPS[MAT_ROCK].molar_heat_capacity_solid;  // 44.4 (solid at 400K)
+    double rock_hc = MATERIAL_PROPS[MAT_ROCK].molar_heat_capacity;  // 44.4 (solid at 400K)
     double rock_temp = 400.0;
     double rock_energy = calculate_material_energy(MAT_ROCK, rock_moles, rock_temp);
 
@@ -203,21 +203,18 @@ static bool test_temperature_empty_cell(void) {
 // ============ MATERIAL PROPERTY TESTS ============
 
 static bool test_material_get_temperature(void) {
-    TEST_BEGIN("material_get_temperature accounts for latent heat");
+    TEST_BEGIN("material_get_temperature derives T from E (single-phase)");
 
+    // In the new single-phase model: T = E / (n * Cp)
+    // MAT_WATER is liquid water with Cp = 75.3 J/(mol·K)
     MaterialState state;
     state.moles = 2.0;
-    double Cp_s = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_solid;
-    double Cp_l = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid;
-    double Tm = MATERIAL_PROPS[MAT_WATER].melting_point;  // 273.15K
-    double Hf = MATERIAL_PROPS[MAT_WATER].enthalpy_fusion; // 6010 J/mol
+    double Cp = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity;  // 75.3
     double target_temp = 350.0;
 
-    // For liquid water at 350K, energy must include latent heat:
-    // E = n * Cp_s * Tm + n * Hf + n * Cp_l * (T - Tm)
-    state.thermal_energy = state.moles * Cp_s * Tm +     // Energy to reach melting point (solid)
-                           state.moles * Hf +             // Latent heat of fusion
-                           state.moles * Cp_l * (target_temp - Tm);  // Energy to heat liquid
+    // Single-phase energy calculation: E = n * Cp * T
+    state.thermal_energy = state.moles * Cp * target_temp;
+    state.cached_temp = 0.0;  // Invalidate cache
 
     double temp = material_get_temperature(&state, MAT_WATER);
     ASSERT_FLOAT_EQ(temp, target_temp, 0.01, "material temperature incorrect");
@@ -226,19 +223,19 @@ static bool test_material_get_temperature(void) {
 }
 
 static bool test_material_get_phase_water(void) {
-    TEST_BEGIN("water phase transitions at correct temperatures");
+    TEST_BEGIN("material phases are intrinsic to MaterialType");
 
-    // Ice: below 273.15K
-    Phase phase = material_get_phase(MAT_WATER, 250.0);
-    ASSERT(phase == PHASE_SOLID, "water at 250K should be solid");
+    // In the new single-phase model, each MaterialType has ONE phase
+    // MAT_ICE is solid, MAT_WATER is liquid, MAT_STEAM is gas
+    ASSERT(material_get_phase(MAT_ICE) == PHASE_SOLID, "MAT_ICE should be solid");
+    ASSERT(material_get_phase(MAT_WATER) == PHASE_LIQUID, "MAT_WATER should be liquid");
+    ASSERT(material_get_phase(MAT_STEAM) == PHASE_GAS, "MAT_STEAM should be gas");
 
-    // Liquid: 273.15K to 373.15K
-    phase = material_get_phase(MAT_WATER, 300.0);
-    ASSERT(phase == PHASE_LIQUID, "water at 300K should be liquid");
-
-    // Steam: above 373.15K
-    phase = material_get_phase(MAT_WATER, 400.0);
-    ASSERT(phase == PHASE_GAS, "water at 400K should be gas");
+    // Phase transitions are now material conversions
+    // Verify phase links exist
+    ASSERT(MATERIAL_PROPS[MAT_WATER].solid_form == MAT_ICE, "water freezes to ice");
+    ASSERT(MATERIAL_PROPS[MAT_WATER].gas_form == MAT_STEAM, "water boils to steam");
+    ASSERT(MATERIAL_PROPS[MAT_ICE].liquid_form == MAT_WATER, "ice melts to water");
 
     TEST_PASS();
 }
@@ -246,14 +243,14 @@ static bool test_material_get_phase_water(void) {
 static bool test_material_properties_lookup(void) {
     TEST_BEGIN("material properties are accessible");
 
-    // Water properties
+    // Water properties (MAT_WATER is liquid phase)
     ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].molar_mass, 0.018, 0.001, "water molar mass");
-    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].melting_point, 273.15, 0.01, "water melting point");
-    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].boiling_point, 373.15, 0.01, "water boiling point");
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].transition_temp_down, 273.15, 0.01, "water freezing point");
+    ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_WATER].transition_temp_up, 373.15, 0.01, "water boiling point");
 
-    // Rock properties
+    // Rock properties (MAT_ROCK is solid phase)
     ASSERT_FLOAT_EQ(MATERIAL_PROPS[MAT_ROCK].molar_mass, 0.060, 0.001, "rock molar mass");
-    ASSERT(MATERIAL_PROPS[MAT_ROCK].melting_point > 1900, "rock melting point should be high");
+    ASSERT(MATERIAL_PROPS[MAT_ROCK].transition_temp_up > 1900, "rock melting point should be high");
 
     TEST_PASS();
 }

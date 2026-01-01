@@ -96,21 +96,18 @@ static void run_physics_steps(ChunkWorld *world, int steps) {
 // --- Temperature Calculation Tests ---
 
 static bool test_temperature_from_energy(void) {
-    TEST_BEGIN("temperature calculation with latent heat");
+    TEST_BEGIN("temperature calculation (single-phase: T = E/(n*Cp))");
 
+    // In single-phase model, each material has one phase and one Cp
+    // MAT_WATER is liquid water with Cp = 75.3 J/(mol·K)
     MaterialState state;
-    state.moles = 2.0;  // 2 moles of water
-    double target_temp = 300.0;  // Target: 300K (liquid water)
-    double Cp_s = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_solid;
-    double Cp_l = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid;
-    double Tm = MATERIAL_PROPS[MAT_WATER].melting_point;  // 273.15K
-    double Hf = MATERIAL_PROPS[MAT_WATER].enthalpy_fusion; // 6010 J/mol
+    state.moles = 2.0;
+    double target_temp = 300.0;
+    double Cp = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity;
 
-    // For liquid water at 300K:
-    // E = n * Cp_s * Tm + n * Hf + n * Cp_l * (T - Tm)
-    state.thermal_energy = state.moles * Cp_s * Tm +     // Energy to reach melting point (solid)
-                           state.moles * Hf +             // Latent heat of fusion
-                           state.moles * Cp_l * (target_temp - Tm);  // Energy to heat liquid
+    // Single-phase: E = n * Cp * T
+    state.thermal_energy = state.moles * Cp * target_temp;
+    state.cached_temp = 0.0;  // Invalidate cache
 
     double calculated_temp = material_get_temperature(&state, MAT_WATER);
 
@@ -155,19 +152,19 @@ static bool test_cell_temperature_weighted_average(void) {
     Cell3D cell;
     cell3d_init(&cell);
 
-    // Add 1 mol water at 400K (gas phase - needs latent heat)
+    // Add 1 mol water at 350K (MAT_WATER is liquid)
     double water_moles = 1.0;
-    double water_hc = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_gas;  // Gas at 400K
-    double water_temp = 400.0;
+    double water_hc = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity;
+    double water_temp = 350.0;
     double water_energy = calculate_material_energy(MAT_WATER, water_moles, water_temp);
     cell3d_add_material(&cell, MAT_WATER, water_moles, water_energy);
 
-    // Add 1 mol air at 200K (gas phase - N2 boils at 77K, so at 200K it's gas)
+    // Add 1 mol nitrogen at 200K (MAT_NITROGEN is gas, alias MAT_AIR)
     double air_moles = 1.0;
-    double air_hc = MATERIAL_PROPS[MAT_AIR].molar_heat_capacity_gas;  // Air is always gas
+    double air_hc = MATERIAL_PROPS[MAT_NITROGEN].molar_heat_capacity;
     double air_temp = 200.0;
-    double air_energy = calculate_material_energy(MAT_AIR, air_moles, air_temp);
-    cell3d_add_material(&cell, MAT_AIR, air_moles, air_energy);
+    double air_energy = calculate_material_energy(MAT_NITROGEN, air_moles, air_temp);
+    cell3d_add_material(&cell, MAT_NITROGEN, air_moles, air_energy);
 
     double cell_temp = cell_get_temperature(&cell);
 
@@ -182,41 +179,54 @@ static bool test_cell_temperature_weighted_average(void) {
 }
 
 // --- Phase Determination Tests ---
+// In single-phase model, phases are intrinsic to MaterialType
 
 static bool test_water_phase_solid_below_273(void) {
-    TEST_BEGIN("water is solid below 273K");
+    TEST_BEGIN("MAT_ICE is solid phase of water");
 
-    Phase phase = material_get_phase(MAT_WATER, 260.0);
-    ASSERT(phase == PHASE_SOLID, "should be solid at 260K");
+    // MAT_ICE is always solid - phase is intrinsic
+    Phase phase = material_get_phase(MAT_ICE);
+    ASSERT(phase == PHASE_SOLID, "MAT_ICE should be solid");
+
+    // Verify transition temperature
+    ASSERT(MATERIAL_PROPS[MAT_ICE].transition_temp_up > 0, "ice should have melting point");
     TEST_PASS();
 }
 
 static bool test_water_phase_liquid_273_to_373(void) {
-    TEST_BEGIN("water is liquid between 273K and 373K");
+    TEST_BEGIN("MAT_WATER is liquid phase of water");
 
-    Phase phase_low = material_get_phase(MAT_WATER, 280.0);
-    Phase phase_mid = material_get_phase(MAT_WATER, 320.0);
-    Phase phase_high = material_get_phase(MAT_WATER, 370.0);
+    // MAT_WATER is always liquid - phase is intrinsic
+    Phase phase = material_get_phase(MAT_WATER);
+    ASSERT(phase == PHASE_LIQUID, "MAT_WATER should be liquid");
 
-    ASSERT(phase_low == PHASE_LIQUID, "should be liquid at 280K");
-    ASSERT(phase_mid == PHASE_LIQUID, "should be liquid at 320K");
-    ASSERT(phase_high == PHASE_LIQUID, "should be liquid at 370K");
+    // Verify transition links
+    ASSERT(MATERIAL_PROPS[MAT_WATER].solid_form == MAT_ICE, "water freezes to ice");
+    ASSERT(MATERIAL_PROPS[MAT_WATER].gas_form == MAT_STEAM, "water boils to steam");
     TEST_PASS();
 }
 
 static bool test_water_phase_gas_above_373(void) {
-    TEST_BEGIN("water is gas above 373K");
+    TEST_BEGIN("MAT_STEAM is gas phase of water");
 
-    Phase phase = material_get_phase(MAT_WATER, 400.0);
-    ASSERT(phase == PHASE_GAS, "should be gas at 400K");
+    // MAT_STEAM is always gas - phase is intrinsic
+    Phase phase = material_get_phase(MAT_STEAM);
+    ASSERT(phase == PHASE_GAS, "MAT_STEAM should be gas");
+
+    // Verify transition links
+    ASSERT(MATERIAL_PROPS[MAT_STEAM].liquid_form == MAT_WATER, "steam condenses to water");
     TEST_PASS();
 }
 
 static bool test_rock_phase_solid_at_room_temp(void) {
-    TEST_BEGIN("rock is solid at room temperature (293K)");
+    TEST_BEGIN("MAT_ROCK is solid phase of rock");
 
-    Phase phase = material_get_phase(MAT_ROCK, 293.0);  // Room temperature
-    ASSERT(phase == PHASE_SOLID, "rock should be solid at 293K");
+    // MAT_ROCK is always solid - phase is intrinsic
+    Phase phase = material_get_phase(MAT_ROCK);
+    ASSERT(phase == PHASE_SOLID, "MAT_ROCK should be solid");
+
+    // Verify transition to liquid exists
+    ASSERT(MATERIAL_PROPS[MAT_ROCK].liquid_form == MAT_MAGMA, "rock melts to magma");
     TEST_PASS();
 }
 
@@ -228,11 +238,9 @@ static bool test_material_properties_defined(void) {
     for (int i = 0; i < MAT_COUNT; i++) {
         const MaterialProperties *props = &MATERIAL_PROPS[i];
         ASSERT(props->name != NULL, "name should not be NULL");
-        // Molar heat capacities should be positive for real materials (except NONE)
+        // Single-phase: each material has one heat capacity
         if (i != MAT_NONE) {
-            ASSERT(props->molar_heat_capacity_solid > 0, "solid heat capacity should be positive");
-            ASSERT(props->molar_heat_capacity_liquid > 0, "liquid heat capacity should be positive");
-            ASSERT(props->molar_heat_capacity_gas > 0, "gas heat capacity should be positive");
+            ASSERT(props->molar_heat_capacity > 0, "heat capacity should be positive");
         }
     }
     TEST_PASS();
@@ -244,8 +252,9 @@ static bool test_water_properties_correct(void) {
     const MaterialProperties *water = &MATERIAL_PROPS[MAT_WATER];
 
     ASSERT_FLOAT_EQ(water->molar_mass, 0.018, 0.001, "water molar mass should be 18g/mol");
-    ASSERT_FLOAT_EQ(water->melting_point, 273.15, 0.1, "water melting point should be 273.15K");
-    ASSERT_FLOAT_EQ(water->boiling_point, 373.15, 0.1, "water boiling point should be 373.15K");
+    // In single-phase model, MAT_WATER is liquid with transition temps
+    ASSERT_FLOAT_EQ(water->transition_temp_down, 273.15, 0.1, "water freezing point should be 273.15K");
+    ASSERT_FLOAT_EQ(water->transition_temp_up, 373.15, 0.1, "water boiling point should be 373.15K");
     TEST_PASS();
 }
 
@@ -435,16 +444,8 @@ static bool test_liquid_flows_down(void) {
     Cell3D *cell = svo_get_cell_for_write(&svo, cx, cy, cz);
     if (cell) {
         double water_moles = 5.0;
-        double Cp_s = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_solid;
-        double Cp_l = MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid;
-        double Tm = MATERIAL_PROPS[MAT_WATER].melting_point;
-        double Hf = MATERIAL_PROPS[MAT_WATER].enthalpy_fusion;
-
-        // For liquid water at 293K, must include latent heat:
-        // E = n * Cp_s * Tm + n * Hf + n * Cp_l * (T - Tm)
-        double energy = water_moles * Cp_s * Tm +
-                        water_moles * Hf +
-                        water_moles * Cp_l * (INITIAL_TEMP_K - Tm);
+        // Single-phase: E = n * Cp * T
+        double energy = calculate_material_energy(MAT_WATER, water_moles, INITIAL_TEMP_K);
         cell3d_add_material(cell, MAT_WATER, water_moles, energy);
 
         // Mark cell active so physics will process it
@@ -627,19 +628,17 @@ static bool test_heat_flows_between_matter_cells(void) {
 // ============================================================================
 
 static bool test_water_phase_determined_by_temperature(void) {
-    TEST_BEGIN("water phase determined by temperature");
+    TEST_BEGIN("water phase variants as separate materials");
 
-    // Ice (T < 273.15K)
-    Phase ice_phase = material_get_phase(MAT_WATER, 260.0);
-    ASSERT(ice_phase == PHASE_SOLID, "260K should be solid");
+    // In single-phase model, phases are intrinsic to MaterialType
+    Phase ice_phase = material_get_phase(MAT_ICE);
+    ASSERT(ice_phase == PHASE_SOLID, "MAT_ICE should be solid");
 
-    // Liquid (273.15K < T < 373.15K)
-    Phase liquid_phase = material_get_phase(MAT_WATER, 300.0);
-    ASSERT(liquid_phase == PHASE_LIQUID, "300K should be liquid");
+    Phase liquid_phase = material_get_phase(MAT_WATER);
+    ASSERT(liquid_phase == PHASE_LIQUID, "MAT_WATER should be liquid");
 
-    // Gas (T > 373.15K)
-    Phase gas_phase = material_get_phase(MAT_WATER, 400.0);
-    ASSERT(gas_phase == PHASE_GAS, "400K should be gas");
+    Phase gas_phase = material_get_phase(MAT_STEAM);
+    ASSERT(gas_phase == PHASE_GAS, "MAT_STEAM should be gas");
 
     TEST_PASS();
 }

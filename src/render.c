@@ -283,12 +283,16 @@ void render_frame(const GameState *state)
     }
 
     // ========== COLLECT TERRAIN INSTANCES ==========
+    // Use cell centers (+0.5) to align with physics cell coordinate system.
+    // Cell (cx, cy, cz) renders at center: ((cx-offset+0.5)*SIZE, ...)
+    // Terrain grid (x, z) maps to cell (x+128, height+128, z+128), so:
+    //   world_x = (x + 0.5) * TERRAIN_SCALE gives the cell center
     for (int x = 0; x < TERRAIN_RESOLUTION; x++) {
         for (int z = 0; z < TERRAIN_RESOLUTION; z++) {
             int height = state->terrain_height[x][z];
-            float world_x = x * TERRAIN_SCALE;
-            float world_y = height * TERRAIN_SCALE;
-            float world_z = z * TERRAIN_SCALE;
+            float world_x = (x + 0.5f) * TERRAIN_SCALE;
+            float world_y = (height + 0.5f) * TERRAIN_SCALE;
+            float world_z = (z + 0.5f) * TERRAIN_SCALE;
 
             ColorGroup group = get_terrain_group(state, x, z);
             add_instance(group, world_x, world_y, world_z, TERRAIN_SCALE);
@@ -442,9 +446,13 @@ void render_frame(const GameState *state)
     // ========== COLLECT WATER/MATTER INSTANCES FROM SVO ==========
     // Sample the SVO around the terrain area and render visible materials
     {
-        // Sample area: cover the terrain grid area, multiple Y levels
-        int sample_start_x = SVO_SIZE / 2 - TERRAIN_RESOLUTION / 2;
-        int sample_start_z = SVO_SIZE / 2 - TERRAIN_RESOLUTION / 2;
+        // Sample area: must match where terrain was placed in world_init_terrain()
+        // Terrain grid (tx, tz) with tx from 0 to TERRAIN_RESOLUTION-1 is placed at:
+        //   world_x = tx * TERRAIN_SCALE
+        //   cx = floor(world_x / VOXEL_CELL_SIZE) + WORLD_SIZE_CELLS/2 = tx + 128
+        // So terrain cells span from cx=128 to cx=128+TERRAIN_RESOLUTION-1
+        int sample_start_x = SVO_SIZE / 2;  // = 128, where terrain starts
+        int sample_start_z = SVO_SIZE / 2;
         int sample_end_x = sample_start_x + TERRAIN_RESOLUTION;
         int sample_end_z = sample_start_z + TERRAIN_RESOLUTION;
 
@@ -466,38 +474,37 @@ void render_frame(const GameState *state)
                         float wx, wy, wz;
                         svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
 
-                        // Determine water depth for coloring
+                        // In single-phase model, MAT_WATER is always liquid
                         double water_moles = water->state.moles;
                         ColorGroup water_group = (water_moles > 2.0) ? GROUP_WATER_DEEP : GROUP_WATER_SHALLOW;
-
-                        // Check phase - ice vs liquid vs steam
-                        // Use energy-based phase for accurate rendering
-                        Phase phase = material_get_phase_from_energy(&water->state, MAT_WATER);
-
-                        if (phase == PHASE_SOLID) {
-                            water_group = GROUP_ICE;
-                        } else if (phase == PHASE_GAS) {
-                            water_group = GROUP_STEAM;
-                        }
-
                         add_instance(water_group, wx, wy, wz, SVO_CELL_SIZE);
                     }
 
-                    // Check for lava (hot rock)
-                    MaterialEntry *rock = cell3d_find_material(cell, MAT_ROCK);
-                    if (rock && rock->state.moles > 0.1) {
-                        // Use energy-based phase for accurate rendering
-                        Phase phase = material_get_phase_from_energy(&rock->state, MAT_ROCK);
-                        double temp = material_get_temperature(&rock->state, MAT_ROCK);
+                    // Check for ice (now a separate material)
+                    MaterialEntry *ice = cell3d_find_material(cell, MAT_ICE);
+                    if (ice && ice->state.moles > 0.1) {
+                        float wx, wy, wz;
+                        svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
+                        add_instance(GROUP_ICE, wx, wy, wz, SVO_CELL_SIZE);
+                    }
 
-                        if (phase == PHASE_LIQUID) {
-                            float wx, wy, wz;
-                            svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
+                    // Check for steam (now a separate material)
+                    MaterialEntry *steam = cell3d_find_material(cell, MAT_STEAM);
+                    if (steam && steam->state.moles > 0.1) {
+                        float wx, wy, wz;
+                        svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
+                        add_instance(GROUP_STEAM, wx, wy, wz, SVO_CELL_SIZE);
+                    }
 
-                            ColorGroup lava_group = (temp > 2500) ? GROUP_LAVA_HOT :
-                                                    (temp > 2000) ? GROUP_LAVA_COOLING : GROUP_LAVA_COLD;
-                            add_instance(lava_group, wx, wy, wz, SVO_CELL_SIZE);
-                        }
+                    // Check for magma (now a separate material, was MAT_ROCK in liquid phase)
+                    MaterialEntry *magma = cell3d_find_material(cell, MAT_MAGMA);
+                    if (magma && magma->state.moles > 0.1) {
+                        float wx, wy, wz;
+                        svo_cell_to_world(cx, cy, cz, &wx, &wy, &wz);
+                        double temp = material_get_temperature(&magma->state, MAT_MAGMA);
+                        ColorGroup lava_group = (temp > 2500) ? GROUP_LAVA_HOT :
+                                                (temp > 2000) ? GROUP_LAVA_COOLING : GROUP_LAVA_COLD;
+                        add_instance(lava_group, wx, wy, wz, SVO_CELL_SIZE);
                     }
                 }
             }

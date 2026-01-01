@@ -28,6 +28,7 @@
 #define TEMP_EPSILON 0.1           // Temperature tolerance for equilibrium
 #define MOLES_EPSILON 1e-10        // Moles tolerance for empty check
 #define EQUILIBRIUM_FRAMES 60      // Frames of no activity before marking stable
+#define CELL_VOLUME_CAPACITY 0.1   // m³ per cell - volume capacity for displacement
 
 // ============ NEIGHBOR DIRECTIONS ============
 
@@ -52,18 +53,43 @@ static const Direction DIR_OPPOSITE[6] = {
 };
 
 // ============ MATERIAL TYPES ============
+// Each phase of a substance is a separate material type.
+// Phase transitions convert between related materials.
 
 typedef enum {
     MAT_NONE = 0,
-    MAT_AIR,
-    MAT_WATER,
-    MAT_ROCK,
-    MAT_DIRT,
-    MAT_NITROGEN,
-    MAT_OXYGEN,
-    MAT_CARBON_DIOXIDE,
-    MAT_STEAM,
-    MAT_COUNT
+
+    // Water phases (H2O)
+    MAT_ICE,            // Solid  - melts at 273K
+    MAT_WATER,          // Liquid - boils at 373K
+    MAT_STEAM,          // Gas
+
+    // Rock phases (SiO2)
+    MAT_ROCK,           // Solid  - melts at 1986K
+    MAT_MAGMA,          // Liquid - boils at 2503K
+    MAT_ROCK_VAPOR,     // Gas (extreme temps)
+
+    // Dirt phases (soil mixture)
+    MAT_DIRT,           // Solid  - melts at ~1500K
+    MAT_MUD,            // Liquid
+    MAT_DIRT_VAPOR,     // Gas (extreme temps)
+
+    // Nitrogen phases (N2)
+    MAT_SOLID_NITROGEN, // Solid  - melts at 63K
+    MAT_LIQUID_NITROGEN,// Liquid - boils at 77K
+    MAT_NITROGEN,       // Gas
+
+    // Oxygen phases (O2)
+    MAT_SOLID_OXYGEN,   // Solid  - melts at 54K
+    MAT_LIQUID_OXYGEN,  // Liquid - boils at 90K
+    MAT_OXYGEN,         // Gas (oxidizer)
+
+    // Carbon dioxide phases (CO2)
+    MAT_DRY_ICE,        // Solid  - sublimes at 195K (1 atm)
+    MAT_LIQUID_CO2,     // Liquid - only stable at high pressure
+    MAT_CARBON_DIOXIDE, // Gas
+
+    MAT_COUNT           // = 19 materials
 } MaterialType;
 
 // ============ PHASE ENUM ============
@@ -95,7 +121,7 @@ typedef struct {
 
 typedef struct {
     MaterialState materials[MAT_COUNT];
-    uint16_t present;  // Bitmask: bit i set = materials[i] is valid
+    uint32_t present;  // Bitmask: bit i set = materials[i] is valid (supports up to 32 materials)
 } Cell3D;
 
 // O(1) material access macros
@@ -107,30 +133,42 @@ typedef struct {
         if (CELL_HAS_MATERIAL(cell, var))
 
 // ============ MATERIAL PROPERTIES ============
+// Each material has single-phase properties (no _solid/_liquid/_gas variants).
+// Phase transitions link related materials together.
 
 typedef struct {
     const char *name;
     const char *formula;
-    double molar_mass;
-    double molar_volume_solid;
-    double molar_volume_liquid;
-    double molar_volume_gas;
-    double molar_heat_capacity_solid;
-    double molar_heat_capacity_liquid;
-    double molar_heat_capacity_gas;
-    double melting_point;
-    double boiling_point;
-    double enthalpy_fusion;
-    double enthalpy_vaporization;
-    double thermal_conductivity;
-    double viscosity;
+
+    // Intrinsic phase of this material
+    Phase phase;
+
+    // Physical properties (single phase)
+    double molar_mass;           // kg/mol
+    double molar_volume;         // m³/mol
+    double molar_heat_capacity;  // J/(mol·K)
+    double thermal_conductivity; // W/(m·K)
+    double viscosity;            // Pa·s (for flow rate)
+
+    // Phase transition links (MAT_NONE if no transition possible)
+    MaterialType solid_form;     // What this becomes when cooled to solid
+    MaterialType liquid_form;    // What this becomes when melted/condensed
+    MaterialType gas_form;       // What this becomes when boiled/sublimated
+
+    // Transition thresholds
+    double transition_temp_down; // K - temp to transition to denser phase
+    double transition_temp_up;   // K - temp to transition to lighter phase
+    double enthalpy_down;        // J/mol - latent heat for cooling transition
+    double enthalpy_up;          // J/mol - latent heat for heating transition
+
+    // Combustion properties
     bool is_oxidizer;
     bool is_fuel;
     double ignition_temp;
     double enthalpy_combustion;
-    Color color_solid;
-    Color color_liquid;
-    Color color_gas;
+
+    // Visual (single color per material)
+    Color color;
 } MaterialProperties;
 
 extern const MaterialProperties MATERIAL_PROPS[MAT_COUNT];
@@ -249,10 +287,27 @@ const MaterialEntry* cell_find_material_const(const Cell3D *cell, MaterialType t
 
 double material_get_temperature(MaterialState *state, MaterialType type);
 double material_get_mass(const MaterialState *state, MaterialType type);
-double material_get_volume(const MaterialState *state, MaterialType type, Phase phase);
-Phase material_get_phase(MaterialType type, double temp_k);
-Phase material_get_phase_from_energy(const MaterialState *state, MaterialType type);
-double get_effective_heat_capacity(const MaterialState *state, MaterialType type);
+double material_get_volume(const MaterialState *state, MaterialType type);
+double material_get_density(MaterialType type);
+
+// Phase is now intrinsic to MaterialType - just look up MATERIAL_PROPS[type].phase
+static inline Phase material_get_phase(MaterialType type) {
+    extern const MaterialProperties MATERIAL_PROPS[];
+    return MATERIAL_PROPS[type].phase;
+}
+
+// Heat capacity is now single-valued per material
+static inline double material_get_heat_capacity(MaterialType type) {
+    extern const MaterialProperties MATERIAL_PROPS[];
+    return MATERIAL_PROPS[type].molar_heat_capacity;
+}
+
+// Phase transition functions
+MaterialType material_check_transition(MaterialType type, double temp_k);
+void material_convert_phase(Cell3D *cell, MaterialType from, MaterialType to);
+
+// Cell density (for multi-material cells - weighted by volume)
+double cell_get_density(const Cell3D *cell);
 
 // Invalidate cached temperature (call when energy changes)
 static inline void material_invalidate_temp(MaterialState *state) {
@@ -262,6 +317,7 @@ static inline void material_invalidate_temp(MaterialState *state) {
 // Cell temperature (weighted average)
 double cell_get_temperature(Cell3D *cell);
 double cell_get_total_volume(const Cell3D *cell);
+double cell_get_available_volume(const Cell3D *cell);
 
 // ============ CHUNK FUNCTIONS ============
 
@@ -320,13 +376,14 @@ typedef enum {
     PHYSICS_NONE          = 0,
     PHYSICS_HEAT_INTERNAL = 1 << 0,  // Internal equilibration within cells
     PHYSICS_HEAT_CONDUCT  = 1 << 1,  // Heat conduction between cells
-    PHYSICS_LIQUID_FLOW   = 1 << 2,  // Liquid flow (gravity-driven)
-    PHYSICS_GAS_DIFFUSE   = 1 << 3,  // Gas diffusion
+    PHYSICS_PHASE_TRANS   = 1 << 2,  // Phase transitions (ice<->water<->steam)
+    PHYSICS_LIQUID_FLOW   = 1 << 3,  // Liquid flow (gravity-driven)
+    PHYSICS_GAS_DIFFUSE   = 1 << 4,  // Gas diffusion
 
     // Common combinations
     PHYSICS_HEAT_ALL      = PHYSICS_HEAT_INTERNAL | PHYSICS_HEAT_CONDUCT,
     PHYSICS_MATTER_ALL    = PHYSICS_LIQUID_FLOW | PHYSICS_GAS_DIFFUSE,
-    PHYSICS_ALL           = PHYSICS_HEAT_ALL | PHYSICS_MATTER_ALL
+    PHYSICS_ALL           = PHYSICS_HEAT_ALL | PHYSICS_PHASE_TRANS | PHYSICS_MATTER_ALL
 } PhysicsFlags;
 
 // Run physics with specific systems enabled
@@ -363,6 +420,9 @@ void world_update_debug_metrics(ChunkWorld *world);
 
 // Type alias for compatibility
 typedef ChunkWorld MatterSVO;
+
+// Material alias for backward compatibility (MAT_AIR -> MAT_NITROGEN)
+#define MAT_AIR MAT_NITROGEN
 
 // Compatibility functions (implemented as wrappers)
 #define svo_init(svo, terrain) world_init_terrain(svo, terrain)

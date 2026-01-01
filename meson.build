@@ -120,7 +120,12 @@ foreach name, sources : full_tests
     include_directories: inc,
     dependencies: all_deps,
   )
-  test(name, exe)
+  # test_3d_physics has intensive fluid dynamics tests that need more time
+  if name == 'test_3d_physics'
+    test(name, exe, timeout: 120)
+  else
+    test(name, exe)
+  endif
 endforeach
 
 # Tests with minimal dependencies

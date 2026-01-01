@@ -83,14 +83,21 @@ static double get_water_moles_at(MatterSVO *svo, int cx, int cy, int cz);
  * Count total water moles by iterating over all chunks.
  */
 static double count_total_water_moles(MatterSVO *svo) {
+    // Count all H2O phases: ice, water, and steam (phase transitions conserve moles)
     double total = 0.0;
     for (int h = 0; h < CHUNK_HASH_SIZE; h++) {
         Chunk *chunk = svo->hash_table[h];
         while (chunk) {
             for (int i = 0; i < CHUNK_VOLUME; i++) {
                 Cell3D *cell = &chunk->cells[i];
+                if (CELL_HAS_MATERIAL(cell, MAT_ICE)) {
+                    total += cell->materials[MAT_ICE].moles;
+                }
                 if (CELL_HAS_MATERIAL(cell, MAT_WATER)) {
                     total += cell->materials[MAT_WATER].moles;
+                }
+                if (CELL_HAS_MATERIAL(cell, MAT_STEAM)) {
+                    total += cell->materials[MAT_STEAM].moles;
                 }
             }
             chunk = chunk->hash_next;
@@ -120,21 +127,31 @@ static double count_total_thermal_energy(MatterSVO *svo) {
 }
 
 static bool has_water_at(MatterSVO *svo, int cx, int cy, int cz) {
+    // Check for any H2O phase (ice, water, steam)
     const Cell3D *cell = svo_get_cell(svo, cx, cy, cz);
     if (!cell) return false;
 
-    return CELL_HAS_MATERIAL(cell, MAT_WATER) &&
-           cell->materials[MAT_WATER].moles > MOLES_EPSILON;
+    return (CELL_HAS_MATERIAL(cell, MAT_ICE) && cell->materials[MAT_ICE].moles > MOLES_EPSILON) ||
+           (CELL_HAS_MATERIAL(cell, MAT_WATER) && cell->materials[MAT_WATER].moles > MOLES_EPSILON) ||
+           (CELL_HAS_MATERIAL(cell, MAT_STEAM) && cell->materials[MAT_STEAM].moles > MOLES_EPSILON);
 }
 
 static double get_water_moles_at(MatterSVO *svo, int cx, int cy, int cz) {
+    // Sum all H2O phases at this cell
     const Cell3D *cell = svo_get_cell(svo, cx, cy, cz);
     if (!cell) return 0.0;
 
-    if (CELL_HAS_MATERIAL(cell, MAT_WATER)) {
-        return cell->materials[MAT_WATER].moles;
+    double total = 0.0;
+    if (CELL_HAS_MATERIAL(cell, MAT_ICE)) {
+        total += cell->materials[MAT_ICE].moles;
     }
-    return 0.0;
+    if (CELL_HAS_MATERIAL(cell, MAT_WATER)) {
+        total += cell->materials[MAT_WATER].moles;
+    }
+    if (CELL_HAS_MATERIAL(cell, MAT_STEAM)) {
+        total += cell->materials[MAT_STEAM].moles;
+    }
+    return total;
 }
 
 static double get_region_avg_temperature(MatterSVO *svo, int cx, int cy, int cz, int radius) {
@@ -436,7 +453,7 @@ void test_heat_injection_basic(void) {
     // Add some water to have material to heat (empty cells have no temperature)
     double initial_moles = 1.0;
     cell_add_material(cell, MAT_WATER, initial_moles,
-                      initial_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid * INITIAL_TEMP_K);
+                      initial_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity * INITIAL_TEMP_K);
 
     double temp_before = cell_get_temperature(cell);
     double energy_before = count_total_thermal_energy(&svo);
@@ -491,7 +508,7 @@ void test_heat_conduction(void) {
 
     // Add water to both cells (empty cells have no temperature)
     double moles = 1.0;
-    double initial_energy = moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid * INITIAL_TEMP_K;
+    double initial_energy = moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity * INITIAL_TEMP_K;
 
     Cell3D *cell1 = svo_get_cell_for_write(&svo, cx, cy, cz);
     Cell3D *cell2 = svo_get_cell_for_write(&svo, cx + 1, cy, cz);
@@ -577,7 +594,7 @@ void test_cold_injection_basic(void) {
     // Add water at room temperature
     double moles = 1.0;
     cell_add_material(cell, MAT_WATER, moles,
-                      moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid * INITIAL_TEMP_K);
+                      moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity * INITIAL_TEMP_K);
 
     double temp_before = cell_get_temperature(cell);
 
@@ -679,11 +696,11 @@ void test_combined_water_heat_cold(void) {
     // Add water to each cell directly
     double water_moles = 5.0;
     cell3d_add_material(cell_hot, MAT_WATER, water_moles,
-                        water_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid * INITIAL_TEMP_K);
+                        water_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity * INITIAL_TEMP_K);
     cell3d_add_material(cell_control, MAT_WATER, water_moles,
-                        water_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid * INITIAL_TEMP_K);
+                        water_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity * INITIAL_TEMP_K);
     cell3d_add_material(cell_cold, MAT_WATER, water_moles,
-                        water_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity_liquid * INITIAL_TEMP_K);
+                        water_moles * MATERIAL_PROPS[MAT_WATER].molar_heat_capacity * INITIAL_TEMP_K);
 
     double initial_water = count_total_water_moles(&svo);
 

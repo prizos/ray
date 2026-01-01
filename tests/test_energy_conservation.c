@@ -96,12 +96,14 @@ static bool test_energy_conservation_two_cells(void) {
     int cy = SVO_SIZE / 2;
     int cz = SVO_SIZE / 2;
 
-    // Cell A: 1 mol water with 1000 J thermal energy (~400K)
-    // Cell B: 1 mol water with 500 J thermal energy (~200K)
-    // Using energy directly, not temperature!
-    double energy_A = 1000.0;  // Joules
-    double energy_B = 500.0;   // Joules
+    // Cell A: 1 mol water with energy for ~350K (hot, below boiling)
+    // Cell B: 1 mol water with energy for ~300K (room temp)
+    // E = n * Cp * T, where Cp_water = 75.3 J/(mol·K)
+    // Must stay above 273K to avoid freezing phase transition
     double moles = 1.0;
+    double Cp_water = 75.3;  // J/(mol·K)
+    double energy_A = moles * Cp_water * 350.0;  // ~26355 J at 350K
+    double energy_B = moles * Cp_water * 300.0;  // ~22590 J at 300K
 
     add_matter(&svo, cx, cy, cz, MAT_WATER, moles, energy_A);
     add_matter(&svo, cx + 1, cy, cz, MAT_WATER, moles, energy_B);
@@ -166,9 +168,11 @@ static bool test_energy_conservation_liquid_flow(void) {
     int cy = SVO_SIZE / 2 + 10;  // High up
     int cz = SVO_SIZE / 2;
 
-    // Add water with known energy
+    // Add water with energy corresponding to ~300K (above freezing)
+    // E = n * Cp * T, Cp_water = 75.3 J/(mol·K)
     double moles = 5.0;
-    double thermal_energy = 2000.0;  // Joules
+    double Cp_water = 75.3;
+    double thermal_energy = moles * Cp_water * 300.0;  // ~112950 J at 300K
 
     add_matter(&svo, cx, cy, cz, MAT_WATER, moles, thermal_energy);
 
@@ -237,8 +241,11 @@ static bool test_no_energy_from_vacuum(void) {
     int cz = SVO_SIZE / 2;
 
     // Only add matter to ONE cell, leave neighbors as vacuum
-    double thermal_energy = 1000.0;
-    add_matter(&svo, cx, cy, cz, MAT_WATER, 1.0, thermal_energy);
+    // Use energy for ~300K (above freezing) to avoid phase transition
+    double moles = 1.0;
+    double Cp_water = 75.3;
+    double thermal_energy = moles * Cp_water * 300.0;  // ~22590 J at 300K
+    add_matter(&svo, cx, cy, cz, MAT_WATER, moles, thermal_energy);
 
     double initial_total = calculate_total_energy(&svo);
 
